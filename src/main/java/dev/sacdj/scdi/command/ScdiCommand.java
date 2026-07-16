@@ -33,7 +33,8 @@ import java.util.List;
 public final class ScdiCommand implements CommandExecutor, TabCompleter {
 
     private static final List<String> SUBCOMMANDS =
-            List.of("menu", "reload", "status", "config", "export", "import", "team", "dummy", "settings", "customitem");
+            List.of("menu", "reload", "status", "config", "export", "import", "team", "dummy", "settings", "customitem", "debug");
+    private static final List<String> DEBUG_SUBCOMMANDS = List.of("tag", "untag");
     private static final List<String> CONFIG_SUBCOMMANDS = List.of("get", "set", "list");
     private static final List<String> TEAM_SUBCOMMANDS = List.of("request", "confirm", "reset");
     private static final List<String> DUMMY_SUBCOMMANDS = List.of("spawn", "remove", "removeall", "invincible", "mortal");
@@ -143,6 +144,12 @@ public final class ScdiCommand implements CommandExecutor, TabCompleter {
                 }
                 handleCustomItem(sender, Arrays.copyOfRange(args, 1, args.length));
             }
+            case "debug" -> {
+                if (!requireAdmin(sender)) {
+                    break;
+                }
+                handleDebug(sender, Arrays.copyOfRange(args, 1, args.length));
+            }
             default -> sender.sendMessage(ChatColor.RED + "Unknown subcommand.");
         }
         return true;
@@ -196,6 +203,18 @@ public final class ScdiCommand implements CommandExecutor, TabCompleter {
                 names.add(material.name());
             }
             return matches(names, args[2]);
+        }
+        if (args[0].equalsIgnoreCase("debug")) {
+            if (args.length == 2) {
+                return matches(DEBUG_SUBCOMMANDS, args[1]);
+            }
+            if (args.length == 3) {
+                List<String> names = new ArrayList<>();
+                for (Player online : sender.getServer().getOnlinePlayers()) {
+                    names.add(online.getName());
+                }
+                return matches(names, args[2]);
+            }
         }
 
         return List.of();
@@ -485,6 +504,41 @@ public final class ScdiCommand implements CommandExecutor, TabCompleter {
                 sender.sendMessage(ChatColor.GREEN + material.name() + " removed from custom disabled items.");
             }
             default -> sender.sendMessage(ChatColor.RED + "Unknown customitem subcommand.");
+        }
+    }
+
+    /** /scdi debug tag|untag [player] - force a player into or out of combat
+     * instantly, without needing a real hit to land. For testing everything
+     * downstream of a tag (disguise, warnings, armor flash, actionbar,
+     * below-name timer) without a second player or real PvP damage. */
+    private void handleDebug(CommandSender sender, String[] args) {
+        if (args.length == 0) {
+            sender.sendMessage(ChatColor.GRAY + "/scdi debug <tag|untag> [player]");
+            return;
+        }
+        Player target;
+        if (args.length >= 2) {
+            target = sender.getServer().getPlayerExact(args[1]);
+            if (target == null) {
+                sender.sendMessage(ChatColor.RED + "Player not found or offline.");
+                return;
+            }
+        } else if (sender instanceof Player player) {
+            target = player;
+        } else {
+            sender.sendMessage(ChatColor.RED + "Usage from console: /scdi debug <tag|untag> <player>");
+            return;
+        }
+        switch (args[0].toLowerCase()) {
+            case "tag" -> {
+                combat.tag(target);
+                sender.sendMessage(ChatColor.GREEN + "Tagged " + target.getName() + ".");
+            }
+            case "untag" -> {
+                combat.release(target);
+                sender.sendMessage(ChatColor.GREEN + "Released " + target.getName() + ".");
+            }
+            default -> sender.sendMessage(ChatColor.RED + "Unknown debug subcommand.");
         }
     }
 
