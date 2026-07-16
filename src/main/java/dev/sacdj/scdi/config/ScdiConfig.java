@@ -197,6 +197,16 @@ public final class ScdiConfig {
         return NamespacedKey.fromString(id.replace("minecraft:", ""));
     }
 
+    /** Purely visual (minecraft:item_model) - null means don't override,
+     * just show whatever disguiseItemKey()'s real material looks like. */
+    public NamespacedKey disguiseModelKey() {
+        String id = cfg.getString("disguise.model", "minecraft:barrier");
+        if (id == null || id.isBlank()) {
+            return null;
+        }
+        return NamespacedKey.fromString(id.replace("minecraft:", ""));
+    }
+
     public String disguiseDisplayName() {
         return cfg.getString("disguise.name", "Items Disabled!");
     }

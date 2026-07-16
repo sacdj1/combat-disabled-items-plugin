@@ -48,7 +48,9 @@ public final class DisguiseManager {
 
     private final Map<UUID, List<LockedItem>> locked = new ConcurrentHashMap<>();
     private BukkitTask flashTask;
+    private BukkitTask refreshTask;
     private long flashTickCounter;
+    private long refreshTickCounter;
 
     public DisguiseManager(JavaPlugin plugin, ScdiConfig config, WarningManager warnings) {
         this.plugin = plugin;
@@ -59,11 +61,34 @@ public final class DisguiseManager {
 
     public void start() {
         flashTask = plugin.getServer().getScheduler().runTaskTimer(plugin, this::tickFlash, 0L, 1L);
+        // catches anything picked up/equipped AFTER the initial tag that
+        // wasn't there to scan yet (e.g. unequip a rocket right before
+        // getting hit, re-equip mid-fight) - without this, lock() only ever
+        // ran once per tag/retag, leaving a real bypass for anyone who
+        // timed their inventory around the hit. Every 10 ticks (2/sec) is
+        // plenty responsive without scanning tagged players' inventories
+        // every tick.
+        refreshTask = plugin.getServer().getScheduler().runTaskTimer(plugin, this::tickRefresh, 0L, 10L);
     }
 
     public void stop() {
         if (flashTask != null) {
             flashTask.cancel();
+        }
+        if (refreshTask != null) {
+            refreshTask.cancel();
+        }
+    }
+
+    private void tickRefresh() {
+        if (locked.isEmpty()) {
+            return;
+        }
+        for (UUID id : locked.keySet()) {
+            Player player = plugin.getServer().getPlayer(id);
+            if (player != null && player.isOnline()) {
+                lock(player);
+            }
         }
     }
 
@@ -100,6 +125,24 @@ public final class DisguiseManager {
         }
         PlayerInventory inv = player.getInventory();
         for (LockedItem item : items) {
+            ItemStack currentlyThere = item.location().read(inv);
+            if (currentlyThere != null && !isDisguised(currentlyThere)) {
+                // the disguise item is gone from where it should be (drop/
+                // move/place protection should already stop this, but never
+                // silently overwrite whatever's there now instead of trying
+                // to actually catch this - that's how the exploit reported
+                // this session worked: unconditionally writing the original
+                // back regardless of current slot contents either clobbers
+                // an unrelated item or, if the slot's empty, hands back the
+                // original for free while the disguise item survives
+                // separately as a duplicate). Give the original back
+                // wherever it fits instead of touching this slot at all.
+                java.util.Map<Integer, ItemStack> overflow = inv.addItem(item.original());
+                for (ItemStack leftover : overflow.values()) {
+                    player.getWorld().dropItemNaturally(player.getLocation(), leftover);
+                }
+                continue;
+            }
             item.location().write(inv, item.original());
         }
     }
@@ -201,10 +244,19 @@ public final class DisguiseManager {
         if (loc instanceof ItemLocation.Equipment eq && ARMOR_SUFFIX.containsKey(eq.slot())) {
             return buildDisguiseArmorItem(eq.slot(), amount);
         }
-        ItemStack disguise = new ItemStack(Material.STICK, amount);
+        Material material = resolveMaterial(config.disguiseItemKey(), Material.STICK);
+        ItemStack disguise = new ItemStack(material, amount);
         ItemMeta meta = disguise.getItemMeta();
         meta.setDisplayName(ChatColor.RED + config.disguiseDisplayName());
         meta.setEnchantmentGlintOverride(config.disguiseGlint());
+        // purely visual (minecraft:item_model) - the item's real type above
+        // is what disable it functionally works against, this just changes
+        // what it looks like held/in a slot. Paper exposes this directly;
+        // the datapack had to fake it with a component-patch relay trick.
+        NamespacedKey modelKey = config.disguiseModelKey();
+        if (modelKey != null) {
+            meta.setItemModel(modelKey);
+        }
         meta.getPersistentDataContainer().set(markerKey, PersistentDataType.BOOLEAN, true);
         disguise.setItemMeta(meta);
         return disguise;
@@ -214,7 +266,9 @@ public final class DisguiseManager {
      * to render at all - an arbitrary item (a stick) shows as nothing on the
      * player's body when placed directly in an armor slot. Falls back to a
      * plain stick if the configured material name doesn't resolve to a real
-     * armor piece for this slot. */
+     * armor piece for this slot. Also applies disguise.model on top, for the
+     * inventory icon - the WORN appearance is controlled by the real armor
+     * material chosen above, item_model doesn't affect that. */
     private ItemStack buildDisguiseArmorItem(EquipmentSlot slot, int amount) {
         String materialName = config.disguiseArmorMaterial().toUpperCase() + ARMOR_SUFFIX.get(slot);
         Material material = Material.matchMaterial(materialName);
@@ -225,12 +279,33 @@ public final class DisguiseManager {
         ItemMeta meta = disguise.getItemMeta();
         meta.setDisplayName(ChatColor.RED + config.disguiseDisplayName());
         meta.setEnchantmentGlintOverride(config.disguiseGlint());
+        NamespacedKey modelKey = config.disguiseModelKey();
+        if (modelKey != null) {
+            meta.setItemModel(modelKey);
+        }
         meta.getPersistentDataContainer().set(markerKey, PersistentDataType.BOOLEAN, true);
         disguise.setItemMeta(meta);
         return disguise;
     }
 
-    private boolean isDisguised(ItemStack item) {
+    private Material resolveMaterial(NamespacedKey key, Material fallback) {
+        if (key == null) {
+            return fallback;
+        }
+        Material material = Material.matchMaterial(key.getKey());
+        return material != null ? material : fallback;
+    }
+
+    /** Public - used by {@link DisguiseProtectionListener} to block dropping/
+     * moving/placing a disguise item, which would otherwise let a player
+     * separate it from the {@link LockedItem} tracking it and dupe: the
+     * original gets restored on untag regardless (see the defensive check
+     * in {@link #unlock}), while the disguise item itself survives as an
+     * independent, real item once it's no longer sitting where expected. */
+    public boolean isDisguised(ItemStack item) {
+        if (item == null) {
+            return false;
+        }
         ItemMeta meta = item.getItemMeta();
         return meta != null && meta.getPersistentDataContainer().has(markerKey, PersistentDataType.BOOLEAN);
     }

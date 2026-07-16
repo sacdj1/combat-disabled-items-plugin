@@ -88,7 +88,8 @@ public final class ConfigSchema {
             new Field("dummy.announce-one-shot", Type.BOOLEAN),
             new Field("dummy.announce-time-to-kill", Type.BOOLEAN),
             new Field("dummy.pickup-items", Type.BOOLEAN),
-            new Field("display.show-timer-above-head", Type.BOOLEAN)
+            new Field("display.show-timer-above-head", Type.BOOLEAN),
+            new Field("disguise.model", Type.STRING)
     );
 
     private ConfigSchema() {

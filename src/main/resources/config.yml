@@ -26,6 +26,11 @@ disabled-items:
 
 disguise:
   item: "minecraft:stick"
+  # purely visual (minecraft:item_model component) - doesn't change the
+  # item's real type/behavior at all, just what it looks like held/in a
+  # hotbar slot. Paper exposes this directly as ItemMeta.setItemModel(),
+  # no command-relay tricks needed the way the datapack had to.
+  model: "minecraft:barrier"
   name: "Items Disabled!"
   glint: true
   # what disguised worn armor looks like (helmet/chestplate/leggings/boots

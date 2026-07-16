@@ -103,6 +103,27 @@ public final class CombatManager {
         }
     }
 
+    /** Restores a still-tagged player's real items WITHOUT ending combat -
+     * called the instant a hit is about to kill them (see CombatListener),
+     * racing against Bukkit's own death/drop handling the same way the
+     * datapack's check_restore_before_death.mcfunction does. Two things
+     * this closes: dying with a disguised firework rocket in your hand
+     * would otherwise drop a worthless stick instead of the real item
+     * (visible bug), and - more importantly - if reset_on_death is off, a
+     * player who stays tagged through respawn would get their real gear
+     * silently restored later anyway, meaning dying was a free way to
+     * dodge keepInventory-off item loss entirely unless this runs first so
+     * the REAL items are what's actually at risk in the death drop, same
+     * as normal. Deliberately doesn't touch scdi_tag/combat state at all -
+     * if they're still tagged after respawning, they simply won't have
+     * anything disguised again until the next tag/retag or periodic
+     * refresh re-locks whatever they're holding then. */
+    public void restoreItemsBeforeDeath(Player player) {
+        if (isTagged(player)) {
+            disguiseManager.unlock(player);
+        }
+    }
+
     public void release(Player player) {
         CombatState state = tagged.remove(player.getUniqueId());
         if (state == null) {

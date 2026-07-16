@@ -10,6 +10,7 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
+import org.bukkit.event.entity.EntityDamageEvent;
 import org.bukkit.event.entity.PlayerDeathEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 
@@ -36,6 +37,24 @@ public final class CombatListener implements Listener {
         this.combat = combat;
         this.oneShot = oneShot;
         this.teams = teams;
+    }
+
+    /** Catches EVERY damage type (fall, fire, drowning, PvE, PvP - anything),
+     * not just player-on-player hits - see CombatManager.restoreItemsBeforeDeath
+     * for why this races to restore real items the instant a hit would be
+     * lethal, before Bukkit's own death/drop handling runs. Separate from
+     * the more specific EntityDamageByEntityEvent handler below (which only
+     * covers PvP, for tagging/one-shot), since item loss on death isn't a
+     * PvP-only concern. */
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onAnyDamage(EntityDamageEvent event) {
+        if (!(event.getEntity() instanceof Player victim)) {
+            return;
+        }
+        double postDamageHealth = victim.getHealth() - event.getFinalDamage();
+        if (postDamageHealth <= 0) {
+            combat.restoreItemsBeforeDeath(victim);
+        }
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)

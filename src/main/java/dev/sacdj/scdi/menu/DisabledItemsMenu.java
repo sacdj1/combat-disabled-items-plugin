@@ -33,6 +33,8 @@ public final class DisabledItemsMenu implements MenuScreen {
                 "Also lock a matching item anywhere in the backpack, not just held/worn."));
         inv.setItem(13, MenuItems.toggle("Worn armor", config.disableArmor(),
                 "All 4 armor slots, not just elytra."));
+        inv.setItem(15, MenuItems.nav(Material.CHEST, "Custom Items",
+                config.customDisabledItems().size() + " configured - click to manage."));
         return inv;
     }
 
@@ -45,6 +47,7 @@ public final class DisabledItemsMenu implements MenuScreen {
             case 11 -> toggleAndRefresh(player, manager, "disabled-items.elytra", config.disableElytra());
             case 12 -> toggleAndRefresh(player, manager, "disabled-items.scan-full-inventory", config.scanFullInventory());
             case 13 -> toggleAndRefresh(player, manager, "disabled-items.armor", config.disableArmor());
+            case 15 -> manager.open(player, new CustomItemsMenu(config, chatInput));
             default -> {
             }
         }

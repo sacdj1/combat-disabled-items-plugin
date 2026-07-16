@@ -7,6 +7,7 @@ import dev.sacdj.scdi.command.ScdiCommand;
 import dev.sacdj.scdi.config.ConfigCodec;
 import dev.sacdj.scdi.config.ScdiConfig;
 import dev.sacdj.scdi.disguise.DisguiseManager;
+import dev.sacdj.scdi.disguise.DisguiseProtectionListener;
 import dev.sacdj.scdi.dummy.DummyListener;
 import dev.sacdj.scdi.dummy.DummyManager;
 import dev.sacdj.scdi.menu.MenuManager;
@@ -42,6 +43,7 @@ public final class ScdiPlugin extends JavaPlugin {
         getServer().getPluginManager().registerEvents(
                 new CombatListener(config, combatManager, oneShotTracker, teamManager), this);
         getServer().getPluginManager().registerEvents(new DummyListener(dummyManager), this);
+        getServer().getPluginManager().registerEvents(new DisguiseProtectionListener(disguiseManager), this);
         getCommand("scdi").setExecutor(new ScdiCommand(
                 config, combatManager, menuManager, chatInput, codec, teamManager, dummyManager, warningManager));
 
