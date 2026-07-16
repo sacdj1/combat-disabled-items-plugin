@@ -1,0 +1,33 @@
+# Combat Disabled Items - see the wiki/README for the full explanation of
+# each setting. This file is safe to edit live and reload with /scdi reload.
+
+combat:
+  duration-ms: 10000
+  tag-attacker: true
+  tag-victim: true
+  pve-mode: false
+  retag-resets-timer: true
+  reset-on-death: false
+  ignore-creative: false
+  ranged-attacks-tag: true
+
+disabled-items:
+  firework-rocket: true
+  wind-charge: false
+  elytra: false
+  scan-full-inventory: true
+
+disguise:
+  item: "minecraft:stick"
+  name: "Items Disabled!"
+  glint: true
+
+sounds:
+  combat: "block.note_block.bit"
+  combat-pitch: 0.5
+  safe: "block.note_block.bit"
+  safe-pitch: 1.0
+
+display:
+  actionbar: true
+  title-on-tag: true

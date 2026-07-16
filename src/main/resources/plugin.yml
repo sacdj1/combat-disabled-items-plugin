@@ -1,0 +1,22 @@
+name: CombatDisabledItems
+version: ${version}
+main: dev.sacdj.scdi.ScdiPlugin
+api-version: '26.2'
+author: sacdj
+description: Locks combat-relevant items (fireworks, wind charges, elytra, custom items) during PvP combat.
+# classic plugin.yml, not paper-plugin.yml - this is deliberate. paper-plugin.yml
+# opts into Paper's newer bootstrapper/loader system, which only Paper and its
+# forks (Purpur, Pufferfish, etc.) understand. Plain plugin.yml + a standard
+# JavaPlugin main class is the lowest common denominator that Spigot,
+# CraftBukkit, Paper, and every Paper-family fork can all load, which is what
+# "as many server softwares as possible" actually requires.
+commands:
+  scdi:
+    description: Combat Disabled Items admin command.
+    usage: /scdi <reload|status>
+    permission: scdi.admin
+permissions:
+  scdi.admin:
+    description: Access to /scdi admin subcommands.
+    default: op
+
