@@ -8,6 +8,8 @@ import net.md_5.bungee.api.chat.TextComponent;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.scheduler.BukkitTask;
+import org.bukkit.scoreboard.DisplaySlot;
+import org.bukkit.scoreboard.Objective;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -33,14 +35,18 @@ public final class CombatManager {
     private final JavaPlugin plugin;
     private final ScdiConfig config;
     private final DisguiseManager disguiseManager;
+    private final OneShotTracker oneShotTracker;
 
     private final Map<UUID, CombatState> tagged = new ConcurrentHashMap<>();
     private BukkitTask actionBarTask;
+    private Objective belowNameObjective;
 
-    public CombatManager(JavaPlugin plugin, ScdiConfig config, DisguiseManager disguiseManager) {
+    public CombatManager(JavaPlugin plugin, ScdiConfig config, DisguiseManager disguiseManager,
+                          OneShotTracker oneShotTracker) {
         this.plugin = plugin;
         this.config = config;
         this.disguiseManager = disguiseManager;
+        this.oneShotTracker = oneShotTracker;
     }
 
     public void start() {
@@ -58,6 +64,7 @@ public final class CombatManager {
             state.cancel();
         }
         tagged.clear();
+        releaseBelowNameObjective();
     }
 
     public boolean isTagged(Player player) {
@@ -103,6 +110,10 @@ public final class CombatManager {
         }
         state.cancel();
         disguiseManager.unlock(player);
+        oneShotTracker.onCombatEnd(player);
+        if (belowNameObjective != null) {
+            belowNameObjective.getScore(player.getName()).resetScore();
+        }
         announceReleased(player);
     }
 
@@ -118,6 +129,7 @@ public final class CombatManager {
     }
 
     private void tickActionBars() {
+        updateBelowNameObjective();
         if (tagged.isEmpty() || !config.showActionBar()) {
             return;
         }
@@ -135,6 +147,42 @@ public final class CombatManager {
             ChatColor color = phaseColor(elapsedMs, totalMs);
             sendActionBar(player, color + "⚔ In Combat (" + state.secondsRemaining() + "s)");
         }
+    }
+
+    /** below_name is a single GLOBAL scoreboard slot shared by the whole
+     * server, same caveat the datapack's own show_timer_above_head has - this
+     * only claims it while the setting is on and hands it back (clears
+     * instead of restoring some other prior use, unlike the datapack's
+     * belowname-restore-objective - this plugin doesn't yet track what, if
+     * anything, was using the slot before it) the instant it's turned off. */
+    private void updateBelowNameObjective() {
+        if (!config.showTimerAboveHead()) {
+            releaseBelowNameObjective();
+            return;
+        }
+        if (belowNameObjective == null) {
+            var scoreboard = plugin.getServer().getScoreboardManager().getMainScoreboard();
+            Objective existing = scoreboard.getObjective("scdi_sec");
+            belowNameObjective = existing != null ? existing
+                    : scoreboard.registerNewObjective("scdi_sec", "dummy", "s");
+            belowNameObjective.setDisplaySlot(DisplaySlot.BELOW_NAME);
+        }
+        for (UUID id : tagged.keySet()) {
+            Player player = plugin.getServer().getPlayer(id);
+            CombatState state = tagged.get(id);
+            if (player == null || state == null) {
+                continue;
+            }
+            belowNameObjective.getScore(player.getName()).setScore((int) state.secondsRemaining());
+        }
+    }
+
+    private void releaseBelowNameObjective() {
+        if (belowNameObjective == null) {
+            return;
+        }
+        belowNameObjective.unregister();
+        belowNameObjective = null;
     }
 
     /** Same red -> gold -> yellow fade across the countdown the datapack

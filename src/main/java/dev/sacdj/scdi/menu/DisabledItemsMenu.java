@@ -31,6 +31,8 @@ public final class DisabledItemsMenu implements MenuScreen {
                 "Only the worn chestplate slot."));
         inv.setItem(12, MenuItems.toggle("Scan full inventory", config.scanFullInventory(),
                 "Also lock a matching item anywhere in the backpack, not just held/worn."));
+        inv.setItem(13, MenuItems.toggle("Worn armor", config.disableArmor(),
+                "All 4 armor slots, not just elytra."));
         return inv;
     }
 
@@ -42,6 +44,7 @@ public final class DisabledItemsMenu implements MenuScreen {
             case 10 -> toggleAndRefresh(player, manager, "disabled-items.wind-charge", config.disableWindCharge());
             case 11 -> toggleAndRefresh(player, manager, "disabled-items.elytra", config.disableElytra());
             case 12 -> toggleAndRefresh(player, manager, "disabled-items.scan-full-inventory", config.scanFullInventory());
+            case 13 -> toggleAndRefresh(player, manager, "disabled-items.armor", config.disableArmor());
             default -> {
             }
         }

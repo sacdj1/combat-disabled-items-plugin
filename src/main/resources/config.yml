@@ -3,6 +3,7 @@
 
 combat:
   duration-ms: 10000
+  hit-tagging-enabled: true
   tag-attacker: true
   tag-victim: true
   pve-mode: false
@@ -10,17 +11,78 @@ combat:
   reset-on-death: false
   ignore-creative: false
   ranged-attacks-tag: true
+  team-tag-attacker: true
+  team-tag-victim: false
 
 disabled-items:
   firework-rocket: true
   wind-charge: false
   elytra: false
+  armor: false
   scan-full-inventory: true
+  # each entry: {material: "ENDER_PEARL"} - any extra held item to disable
+  # while tagged, on top of the built-ins above
+  custom-items: []
 
 disguise:
   item: "minecraft:stick"
   name: "Items Disabled!"
   glint: true
+  # what disguised worn armor looks like (helmet/chestplate/leggings/boots
+  # of this material render correctly in the armor slot; disguise.item
+  # above would otherwise show as nothing when worn, since it's not a
+  # real armor piece)
+  armor-material: "LEATHER"
+  armor-flash: true
+  armor-flash-interval-ticks: 6
+
+warnings:
+  armor-warning: true
+  armor-warning-sound: false
+  armor-warning-sound-id: "block.note_block.bit"
+  inventory-warning: false
+  inventory-warning-sound: false
+  inventory-warning-sound-id: "block.note_block.bit"
+
+proximity:
+  enabled: false
+  distance: 6.0
+  retag-distance: 6.0
+  role-by-movement: false
+  team-tag-proximity: false
+  interval-ticks: 5
+
+teams:
+  request-timeout-seconds: 30
+
+one-shot:
+  announce: true
+  ignore-tag: false
+  cooldown-enabled: false
+  cooldown-seconds: 10
+  no-tag-attacker-on-kill: false
+  no-tag-victim-on-kill: true
+
+dummy:
+  allow-player-spawn: false
+  spawn-cooldown-seconds: 30
+  max-per-player: 2
+  max-total: 10
+  max-health: 1000.0
+  one-shot-damage: 20.0
+  invincible-default: false
+  immobile: true
+  look-at-player: true
+  look-range: 5.0
+  regen-enabled: true
+  regen-delay-seconds: 5
+  regen-amount: 1.0
+  regen-interval-ticks: 20
+  show-health: true
+  damage-numbers: true
+  announce-one-shot: true
+  announce-time-to-kill: true
+  pickup-items: false
 
 sounds:
   combat: "block.note_block.bit"
@@ -31,3 +93,4 @@ sounds:
 display:
   actionbar: true
   title-on-tag: true
+  show-timer-above-head: false

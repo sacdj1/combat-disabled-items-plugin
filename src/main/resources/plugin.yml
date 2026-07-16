@@ -12,11 +12,14 @@ description: Locks combat-relevant items (fireworks, wind charges, elytra, custo
 # "as many server softwares as possible" actually requires.
 commands:
   scdi:
-    description: Combat Disabled Items admin command.
-    usage: /scdi <reload|status>
-    permission: scdi.admin
+    description: Combat Disabled Items command.
+    usage: /scdi <menu|reload|status|config|export|import|team|dummy|settings>
+# no top-level command permission - status/team/settings/dummy (when allowed
+# by config) are meant for any player; admin-only subcommands (menu, reload,
+# config, export, import, dummy removeall) check scdi.admin individually in
+# ScdiCommand, so a non-op player can still use the rest of the command.
 permissions:
   scdi.admin:
-    description: Access to /scdi admin subcommands.
+    description: Access to /scdi admin subcommands (menu, reload, config, export, import).
     default: op
 

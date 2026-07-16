@@ -1,6 +1,7 @@
 package dev.sacdj.scdi.combat;
 
 import dev.sacdj.scdi.config.ScdiConfig;
+import dev.sacdj.scdi.team.TeamManager;
 import org.bukkit.GameMode;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
@@ -9,6 +10,7 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
+import org.bukkit.event.entity.PlayerDeathEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 
 /**
@@ -16,15 +18,24 @@ import org.bukkit.event.player.PlayerQuitEvent;
  * so this only reacts to damage that actually landed - mirrors the datapack's
  * advancement-based detection, which only fired on genuine applied damage,
  * not damage another plugin/vanilla rule blocked.
+ *
+ * <p>Bukkit fires {@link EntityDamageByEntityEvent} BEFORE subtracting the
+ * damage from the victim's health, even at MONITOR priority - post-damage
+ * health has to be computed manually ({@code getHealth() - getFinalDamage()})
+ * rather than read directly, which is what the one-shot check below does.
  */
 public final class CombatListener implements Listener {
 
     private final ScdiConfig config;
     private final CombatManager combat;
+    private final OneShotTracker oneShot;
+    private final TeamManager teams;
 
-    public CombatListener(ScdiConfig config, CombatManager combat) {
+    public CombatListener(ScdiConfig config, CombatManager combat, OneShotTracker oneShot, TeamManager teams) {
         this.config = config;
         this.combat = combat;
+        this.oneShot = oneShot;
+        this.teams = teams;
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
@@ -46,16 +57,30 @@ public final class CombatListener implements Listener {
         if (victimIsPlayer && attackerIsPlayer) {
             Player victim = (Player) victimEntity;
             Player attacker = (Player) attackerEntity;
-            if (config.tagVictim()) {
+
+            boolean victimWasTagged = combat.isTagged(victim);
+            double postDamageHealth = victim.getHealth() - event.getFinalDamage();
+            boolean wasOneShot = oneShot.onPlayerHit(victim, victimWasTagged, postDamageHealth);
+
+            if (!config.hitTaggingEnabled()) {
+                return;
+            }
+            boolean skipVictim = wasOneShot && config.oneShotNoTagVictim();
+            boolean skipAttacker = wasOneShot && config.oneShotNoTagAttacker();
+            boolean sameTeam = teams.sameTeam(victim, attacker);
+            boolean victimGate = sameTeam ? config.teamTagVictim() : config.tagVictim();
+            boolean attackerGate = sameTeam ? config.teamTagAttacker() : config.tagAttacker();
+
+            if (victimGate && !skipVictim) {
                 maybeTag(victim);
             }
-            if (config.tagAttacker()) {
+            if (attackerGate && !skipAttacker) {
                 maybeTag(attacker);
             }
             return;
         }
 
-        if (!config.pveMode()) {
+        if (!config.hitTaggingEnabled() || !config.pveMode()) {
             return;
         }
 
@@ -63,6 +88,15 @@ public final class CombatListener implements Listener {
             maybeTag((Player) victimEntity);
         } else if (attackerIsPlayer) {
             maybeTag((Player) attackerEntity);
+        }
+    }
+
+    @EventHandler
+    public void onDeath(PlayerDeathEvent event) {
+        Player player = event.getEntity();
+        oneShot.onDeath(player);
+        if (config.resetOnDeath() && combat.isTagged(player)) {
+            combat.release(player);
         }
     }
 
