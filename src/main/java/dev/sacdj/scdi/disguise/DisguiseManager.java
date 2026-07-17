@@ -31,6 +31,18 @@ import java.util.concurrent.ConcurrentHashMap;
  * this holds the actual original {@link ItemStack} object in memory and puts
  * the same object back on unlock. There's no serialization round-trip to lose
  * data in, so that whole bug class is structurally impossible here.
+ *
+ * <p>Each disguise item carries its own unique instance id (a random UUID
+ * baked into its persistent data, separate from the plain boolean "this is
+ * a disguise" marker), and restoring on unlock searches the player's WHOLE
+ * inventory for whichever slot currently holds that id, rather than
+ * remembering a fixed slot from lock-time. That's deliberate: a player has
+ * to be free to reorganize their own inventory (hotbar order, which armor
+ * slot, hand swap) while tagged without it breaking restoration or opening
+ * a duplication hole. {@link DisguiseProtectionListener} still blocks the
+ * two things that actually matter - leaving the inventory entirely (drop,
+ * placing as a block) or moving into a DIFFERENT inventory (a chest,
+ * another player, a villager trade, ...).
  */
 public final class DisguiseManager {
 
@@ -43,6 +55,7 @@ public final class DisguiseManager {
 
     private final JavaPlugin plugin;
     private final NamespacedKey markerKey;
+    private final NamespacedKey instanceKey;
     private final ScdiConfig config;
     private final WarningManager warnings;
 
@@ -50,11 +63,11 @@ public final class DisguiseManager {
     private BukkitTask flashTask;
     private BukkitTask refreshTask;
     private long flashTickCounter;
-    private long refreshTickCounter;
 
     public DisguiseManager(JavaPlugin plugin, ScdiConfig config, WarningManager warnings) {
         this.plugin = plugin;
         this.markerKey = new NamespacedKey(plugin, "disguised");
+        this.instanceKey = new NamespacedKey(plugin, "disguise_instance");
         this.config = config;
         this.warnings = warnings;
     }
@@ -125,26 +138,54 @@ public final class DisguiseManager {
         }
         PlayerInventory inv = player.getInventory();
         for (LockedItem item : items) {
-            ItemStack currentlyThere = item.location().read(inv);
-            if (currentlyThere != null && !isDisguised(currentlyThere)) {
-                // the disguise item is gone from where it should be (drop/
-                // move/place protection should already stop this, but never
-                // silently overwrite whatever's there now instead of trying
-                // to actually catch this - that's how the exploit reported
-                // this session worked: unconditionally writing the original
-                // back regardless of current slot contents either clobbers
-                // an unrelated item or, if the slot's empty, hands back the
-                // original for free while the disguise item survives
-                // separately as a duplicate). Give the original back
-                // wherever it fits instead of touching this slot at all.
-                java.util.Map<Integer, ItemStack> overflow = inv.addItem(item.original());
+            if (!restoreByInstanceId(player, inv, item)) {
+                // genuinely couldn't find the disguise item anywhere in
+                // their inventory (shouldn't happen with drop/move/place
+                // protection in place, but never silently lose the real
+                // item over it either) - hand the original back wherever
+                // it fits, or drop it at their feet if their inventory's
+                // completely full.
+                Map<Integer, ItemStack> overflow = inv.addItem(item.original());
                 for (ItemStack leftover : overflow.values()) {
                     player.getWorld().dropItemNaturally(player.getLocation(), leftover);
                 }
-                continue;
             }
-            item.location().write(inv, item.original());
         }
+    }
+
+    /** Searches every slot the item could currently be sitting in (it's
+     * free to move within the player's own inventory while locked - see
+     * the class javadoc) for the matching instance id, and replaces it
+     * with the original wherever it's actually found. */
+    private boolean restoreByInstanceId(Player player, PlayerInventory inv, LockedItem locked) {
+        for (EquipmentSlot slot : new EquipmentSlot[]{EquipmentSlot.HAND, EquipmentSlot.OFF_HAND,
+                EquipmentSlot.HEAD, EquipmentSlot.CHEST, EquipmentSlot.LEGS, EquipmentSlot.FEET}) {
+            ItemStack current = inv.getItem(slot);
+            if (matchesInstance(current, locked.instanceId())) {
+                inv.setItem(slot, locked.original());
+                return true;
+            }
+        }
+        for (int i = 0; i < inv.getSize(); i++) {
+            ItemStack current = inv.getItem(i);
+            if (matchesInstance(current, locked.instanceId())) {
+                inv.setItem(i, locked.original());
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean matchesInstance(ItemStack item, String instanceId) {
+        if (item == null) {
+            return false;
+        }
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null) {
+            return false;
+        }
+        String id = meta.getPersistentDataContainer().get(instanceKey, PersistentDataType.STRING);
+        return instanceId.equals(id);
     }
 
     /** Re-checks a still-tagged player's inventory for anything that should
@@ -158,19 +199,6 @@ public final class DisguiseManager {
         lock(player);
     }
 
-    public boolean isDisguisedArmorSlot(Player player, EquipmentSlot slot) {
-        List<LockedItem> items = locked.get(player.getUniqueId());
-        if (items == null) {
-            return false;
-        }
-        for (LockedItem item : items) {
-            if (item.location() instanceof ItemLocation.Equipment eq && eq.slot() == slot) {
-                return true;
-            }
-        }
-        return false;
-    }
-
     private void tickFlash() {
         if (!config.disguiseArmorFlash() || locked.isEmpty()) {
             return;
@@ -179,24 +207,27 @@ public final class DisguiseManager {
         if (flashTickCounter % config.disguiseArmorFlashIntervalTicks() != 0) {
             return;
         }
-        for (Map.Entry<UUID, List<LockedItem>> entry : locked.entrySet()) {
-            Player player = plugin.getServer().getPlayer(entry.getKey());
+        for (UUID id : locked.keySet()) {
+            Player player = plugin.getServer().getPlayer(id);
             if (player == null || !player.isOnline()) {
                 continue;
             }
-            boolean hasArmor = false;
-            for (LockedItem item : entry.getValue()) {
-                if (item.location() instanceof ItemLocation.Equipment eq && ARMOR_SUFFIX.containsKey(eq.slot())) {
-                    hasArmor = true;
-                    break;
-                }
-            }
-            if (hasArmor) {
+            if (hasDisguisedArmor(player)) {
                 Location loc = player.getLocation().add(0, 1, 0);
                 player.getWorld().spawnParticle(Particle.DUST, loc, 6, 0.3, 0.5, 0.3,
                         new Particle.DustOptions(org.bukkit.Color.RED, 1.0f));
             }
         }
+    }
+
+    /** Checked live against the player's CURRENT equipment, not stored
+     * lock-time metadata - since a disguised item is free to move between
+     * armor slots (or out of them) while locked, only the live state
+     * reliably answers "is anything they're wearing right now disguised". */
+    private boolean hasDisguisedArmor(Player player) {
+        var equipment = player.getInventory();
+        return isDisguised(equipment.getHelmet()) || isDisguised(equipment.getChestplate())
+                || isDisguised(equipment.getLeggings()) || isDisguised(equipment.getBoots());
     }
 
     private void lockIfMatch(Player player, List<LockedItem> items, PlayerInventory inv, ItemLocation loc) {
@@ -210,8 +241,9 @@ public final class DisguiseManager {
         if (!matchesDisabledItem(current, loc)) {
             return;
         }
-        items.add(new LockedItem(loc, current.clone()));
-        loc.write(inv, buildDisguiseItem(loc, current.getAmount()));
+        String instanceId = UUID.randomUUID().toString();
+        items.add(new LockedItem(instanceId, current.clone()));
+        loc.write(inv, buildDisguiseItem(loc, current.getAmount(), instanceId));
 
         if (loc instanceof ItemLocation.Equipment eq && ARMOR_SUFFIX.containsKey(eq.slot())) {
             warnings.maybeWarnArmor(player);
@@ -240,9 +272,9 @@ public final class DisguiseManager {
         return custom.contains(type);
     }
 
-    private ItemStack buildDisguiseItem(ItemLocation loc, int amount) {
+    private ItemStack buildDisguiseItem(ItemLocation loc, int amount, String instanceId) {
         if (loc instanceof ItemLocation.Equipment eq && ARMOR_SUFFIX.containsKey(eq.slot())) {
-            return buildDisguiseArmorItem(eq.slot(), amount);
+            return buildDisguiseArmorItem(eq.slot(), amount, instanceId);
         }
         Material material = resolveMaterial(config.disguiseItemKey(), Material.STICK);
         ItemStack disguise = new ItemStack(material, amount);
@@ -258,6 +290,7 @@ public final class DisguiseManager {
             meta.setItemModel(modelKey);
         }
         meta.getPersistentDataContainer().set(markerKey, PersistentDataType.BOOLEAN, true);
+        meta.getPersistentDataContainer().set(instanceKey, PersistentDataType.STRING, instanceId);
         disguise.setItemMeta(meta);
         return disguise;
     }
@@ -269,7 +302,7 @@ public final class DisguiseManager {
      * armor piece for this slot. Also applies disguise.model on top, for the
      * inventory icon - the WORN appearance is controlled by the real armor
      * material chosen above, item_model doesn't affect that. */
-    private ItemStack buildDisguiseArmorItem(EquipmentSlot slot, int amount) {
+    private ItemStack buildDisguiseArmorItem(EquipmentSlot slot, int amount, String instanceId) {
         String materialName = config.disguiseArmorMaterial().toUpperCase() + ARMOR_SUFFIX.get(slot);
         Material material = Material.matchMaterial(materialName);
         if (material == null) {
@@ -284,6 +317,7 @@ public final class DisguiseManager {
             meta.setItemModel(modelKey);
         }
         meta.getPersistentDataContainer().set(markerKey, PersistentDataType.BOOLEAN, true);
+        meta.getPersistentDataContainer().set(instanceKey, PersistentDataType.STRING, instanceId);
         disguise.setItemMeta(meta);
         return disguise;
     }
@@ -296,12 +330,14 @@ public final class DisguiseManager {
         return material != null ? material : fallback;
     }
 
-    /** Public - used by {@link DisguiseProtectionListener} to block dropping/
-     * moving/placing a disguise item, which would otherwise let a player
-     * separate it from the {@link LockedItem} tracking it and dupe: the
-     * original gets restored on untag regardless (see the defensive check
-     * in {@link #unlock}), while the disguise item itself survives as an
-     * independent, real item once it's no longer sitting where expected. */
+    /** Public - used by {@link DisguiseProtectionListener} to block a
+     * disguise item leaving the player's own inventory (drop, place as a
+     * block) or moving into a different inventory (chest, trade, another
+     * player, ...) - both would separate it from the tracking that lets
+     * {@link #unlock} find it again, which is how the item duplication bug
+     * reported this session actually worked. Free movement WITHIN a
+     * player's own inventory is deliberately allowed - see the class
+     * javadoc. */
     public boolean isDisguised(ItemStack item) {
         if (item == null) {
             return false;
@@ -310,6 +346,6 @@ public final class DisguiseManager {
         return meta != null && meta.getPersistentDataContainer().has(markerKey, PersistentDataType.BOOLEAN);
     }
 
-    private record LockedItem(ItemLocation location, ItemStack original) {
+    private record LockedItem(String instanceId, ItemStack original) {
     }
 }
