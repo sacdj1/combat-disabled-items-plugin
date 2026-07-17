@@ -5,10 +5,12 @@ import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.block.BlockPlaceEvent;
+import org.bukkit.event.inventory.InventoryAction;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.event.inventory.InventoryType;
 import org.bukkit.event.player.PlayerDropItemEvent;
+import org.bukkit.inventory.Inventory;
 
 /**
  * Keeps a disguise item from leaving the player's own inventory - dropping
@@ -24,12 +26,11 @@ import org.bukkit.event.player.PlayerDropItemEvent;
  * the player's own inventory (hotbar order, which armor slot, hand swap) -
  * {@link DisguiseManager} tracks each disguise item by its own unique
  * instance id now, not a fixed slot, specifically so a player isn't locked
- * out of organizing their own inventory while tagged. The only thing that
- * distinguishes "the player's own inventory screen" from "some other
- * inventory is involved" here is the open view's top inventory type -
- * {@code CRAFTING} is what Bukkit uses for a player's own inventory screen
- * (the 2x2 crafting grid + armor + offhand), anything else means a real
- * external container is open.
+ * out of organizing their own inventory while tagged. Only the SPECIFIC
+ * click/drag that would actually move the item into an external inventory
+ * gets cancelled - having a chest open at all doesn't blanket-block
+ * everything else just because a disguise item happens to be on the
+ * cursor or in the clicked slot at the time.
  */
 public final class DisguiseProtectionListener implements Listener {
 
@@ -54,8 +55,15 @@ public final class DisguiseProtectionListener implements Listener {
         if (!involvesDisguise) {
             return;
         }
-        InventoryType topType = event.getView().getTopInventory().getType();
-        if (topType != InventoryType.CRAFTING) {
+        Inventory top = event.getView().getTopInventory();
+        if (top.getType() == InventoryType.CRAFTING) {
+            // only the player's own inventory screen is open at all -
+            // nothing external for this click to move the item into.
+            return;
+        }
+        boolean clickedExternalInventory = top.equals(event.getClickedInventory());
+        boolean shiftClickWouldMoveIt = event.getAction() == InventoryAction.MOVE_TO_OTHER_INVENTORY;
+        if (clickedExternalInventory || shiftClickWouldMoveIt) {
             event.setCancelled(true);
             if (event.getWhoClicked() instanceof Player player) {
                 warn(player);
@@ -75,8 +83,13 @@ public final class DisguiseProtectionListener implements Listener {
         if (!involvesDisguise) {
             return;
         }
-        InventoryType topType = event.getView().getTopInventory().getType();
-        if (topType != InventoryType.CRAFTING) {
+        Inventory top = event.getView().getTopInventory();
+        if (top.getType() == InventoryType.CRAFTING) {
+            return;
+        }
+        int topSize = top.getSize();
+        boolean touchesExternalInventory = event.getRawSlots().stream().anyMatch(slot -> slot < topSize);
+        if (touchesExternalInventory) {
             event.setCancelled(true);
             if (event.getWhoClicked() instanceof Player player) {
                 warn(player);
