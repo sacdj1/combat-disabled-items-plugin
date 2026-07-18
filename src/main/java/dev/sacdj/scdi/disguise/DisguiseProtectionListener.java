@@ -17,41 +17,44 @@ import java.util.EnumSet;
 import java.util.Set;
 
 /**
- * Keeps a disguise item from ending up somewhere {@link DisguiseManager}
- * can't cheaply find it again - placing it as a block, moving it into a
- * DIFFERENT inventory (a chest, another player's, a villager trade, ...),
- * or SPLITTING a tracked stack (partial drop, right-click "take half",
- * drag-splitting) all get cancelled outright. Any of these would separate
- * (a fragment of) the stack from tracking, and unlock() restoring the full
- * original on top of that is a real item duplication bug, not just a
- * cosmetic glitch - found live twice this session, both times because a
- * stack got split and one fragment was left behind, untracked, while the
- * player got the FULL original back anyway. Dropping is allowed for a
- * WHOLE stack - {@link DisguiseManager#trackDrop} records the dropped
- * entity's own id so unlock() can find and revert it later.
+ * Keeps a disguised item's tracking correct wherever a player takes it,
+ * instead of blocking movement outright. Dropping (whole or partial),
+ * moving into a chest/barrel/dispenser/other storage inventory, and
+ * drag-splitting are all allowed - {@link DisguiseManager#splitFragment}
+ * and {@link DisguiseManager#reconcile} do the actual work of keeping each
+ * physical fragment independently trackable/restorable no matter where it
+ * ends up, rather than this listener trying to prevent every way a stack
+ * could split or travel.
  *
- * <p>Deliberately does NOT block moving/reordering a disguise item WITHIN
- * the player's own inventory (hotbar order, which armor slot, hand swap) -
- * {@link DisguiseManager} tracks each disguise item by its own unique
- * instance id, not a fixed slot, specifically so a player isn't locked out
- * of organizing their own inventory while tagged. Only actions that would
- * split the stack or move it externally get cancelled.
+ * <p>Two things still ARE blocked outright:
+ * <ul>
+ *   <li>Placing a disguise item as a block - that's functional USE of the
+ *   item, not just storing/moving it, and disabling functional use is the
+ *   actual point of the feature.</li>
+ *   <li>Moving into a "consuming" inventory (a villager trade, a furnace,
+ *   an anvil, a brewing stand, ...) - those can remove an item by a
+ *   mechanism other than plain relocation (traded away, smelted, combined)
+ *   just by clicking elsewhere in the SAME view, which {@link
+ *   DisguiseManager#reconcile}'s next-tick scan can't reliably see through.
+ *   Left untracked, that both lets a worthless disguise stand-in be
+ *   "spent" for real value AND still hands the real original back at
+ *   unlock - see {@link #SAFE_EXTERNAL_TYPES}.</li>
+ * </ul>
  */
 public final class DisguiseProtectionListener implements Listener {
 
-    /** Every {@link InventoryAction} that's guaranteed to move a WHOLE stack
-     * without splitting it - everything else involving a disguised item is
-     * blocked. Safer to allowlist the known-safe actions than to try and
-     * enumerate every possible partial/split action and risk missing one. */
-    private static final Set<InventoryAction> WHOLE_STACK_ACTIONS = EnumSet.of(
-            InventoryAction.NOTHING,
-            InventoryAction.PICKUP_ALL,
-            InventoryAction.PLACE_ALL,
-            InventoryAction.SWAP_WITH_CURSOR,
-            InventoryAction.HOTBAR_SWAP,
-            InventoryAction.HOTBAR_MOVE_AND_READD,
-            InventoryAction.DROP_ALL_CURSOR,
-            InventoryAction.DROP_ALL_SLOT
+    /** Inventory types items are allowed to move into while disguised -
+     * plain storage, where clicking elsewhere in the same view can't make
+     * the item disappear by anything other than relocating it (which
+     * {@link DisguiseManager#reconcile} can always find and re-track).
+     * Deliberately an allowlist, not a blocklist: anything NOT in here
+     * (merchant trades, furnaces, anvils, grindstones, brewing stands,
+     * enchanting tables, ...) stays blocked by default rather than risking
+     * an inventory type this list didn't anticipate. */
+    private static final Set<InventoryType> SAFE_EXTERNAL_TYPES = EnumSet.of(
+            InventoryType.CHEST, InventoryType.BARREL, InventoryType.SHULKER_BOX,
+            InventoryType.ENDER_CHEST, InventoryType.DISPENSER, InventoryType.DROPPER,
+            InventoryType.HOPPER, InventoryType.PLAYER
     );
 
     private final DisguiseManager disguiseManager;
@@ -68,16 +71,12 @@ public final class DisguiseProtectionListener implements Listener {
             return;
         }
         if (!disguiseManager.isFullStack(dropped)) {
-            // a partial drop (single-item Q-press on a bigger stack) - the
-            // remainder left behind in inventory keeps the SAME instance id
-            // (Bukkit copies persistent data onto both halves of a split),
-            // so unlock() would find that remainder first and restore the
-            // full original there, leaving this dropped fragment behind
-            // forever as an inert, permanently-disguised orphan. Block the
-            // split instead of trying to track two fragments of one id.
-            event.setCancelled(true);
-            warn(event.getPlayer());
-            return;
+            // a partial drop (single-item Q-press on a bigger stack) - used
+            // to be blocked outright; now the departing piece just gets its
+            // own independent instance id instead, decoupling it from
+            // whatever's left behind in inventory.
+            instanceId = disguiseManager.splitFragment(event.getPlayer(), instanceId, dropped, dropped.getAmount());
+            event.getItemDrop().setItemStack(dropped);
         }
         disguiseManager.trackDrop(instanceId, event.getItemDrop().getUniqueId());
     }
@@ -90,44 +89,48 @@ public final class DisguiseProtectionListener implements Listener {
         if (!involvesDisguise) {
             return;
         }
-
-        if (!WHOLE_STACK_ACTIONS.contains(event.getAction())) {
-            event.setCancelled(true);
-            if (event.getWhoClicked() instanceof Player player) {
-                warn(player);
-            }
+        if (!(event.getWhoClicked() instanceof Player player)) {
             return;
         }
 
         Inventory top = event.getView().getTopInventory();
-        if (top.getType() == InventoryType.CRAFTING) {
-            // only the player's own inventory screen is open at all -
-            // nothing external for this click to move the item into.
-            return;
-        }
-        boolean clickedExternalInventory = top.equals(event.getClickedInventory());
-        boolean shiftClickWouldMoveIt = event.getAction() == InventoryAction.MOVE_TO_OTHER_INVENTORY;
-        if (clickedExternalInventory || shiftClickWouldMoveIt) {
-            event.setCancelled(true);
-            if (event.getWhoClicked() instanceof Player player) {
+        boolean external = top.getType() != InventoryType.CRAFTING;
+        if (external) {
+            // only block if THIS click actually reaches into the unsafe top
+            // inventory - an external (even unsafe) inventory merely being
+            // open shouldn't stop the player from freely rearranging their
+            // OWN inventory underneath it.
+            boolean touchesTop = top.equals(event.getClickedInventory())
+                    || event.getAction() == InventoryAction.MOVE_TO_OTHER_INVENTORY;
+            if (touchesTop && !SAFE_EXTERNAL_TYPES.contains(top.getType())) {
+                event.setCancelled(true);
                 warn(player);
+                return;
             }
         }
+        disguiseManager.scheduleReconcile(player, external ? top : null);
     }
 
     @EventHandler(ignoreCancelled = true)
     public void onDrag(InventoryDragEvent event) {
-        // dragging is fundamentally a "distribute a cursor stack across
-        // multiple slots" operation - there's no legitimate whole-stack-only
-        // drag that plain clicking doesn't already cover, so any drag of a
-        // disguised stack is blocked outright rather than trying to prove
-        // it wouldn't split anything.
-        if (disguiseManager.isDisguised(event.getOldCursor())) {
-            event.setCancelled(true);
-            if (event.getWhoClicked() instanceof Player player) {
+        if (!disguiseManager.isDisguised(event.getOldCursor())) {
+            return;
+        }
+        if (!(event.getWhoClicked() instanceof Player player)) {
+            return;
+        }
+
+        Inventory top = event.getView().getTopInventory();
+        boolean external = top.getType() != InventoryType.CRAFTING;
+        if (external) {
+            boolean touchesTop = event.getRawSlots().stream().anyMatch(slot -> slot < top.getSize());
+            if (touchesTop && !SAFE_EXTERNAL_TYPES.contains(top.getType())) {
+                event.setCancelled(true);
                 warn(player);
+                return;
             }
         }
+        disguiseManager.scheduleReconcile(player, external ? top : null);
     }
 
     @EventHandler(ignoreCancelled = true)
@@ -139,6 +142,6 @@ public final class DisguiseProtectionListener implements Listener {
     }
 
     private void warn(Player player) {
-        player.sendMessage(ChatColor.RED + "You can't split or move a disabled item outside your own inventory.");
+        player.sendMessage(ChatColor.RED + "You can't do that with a disabled item right now.");
     }
 }

@@ -8,6 +8,7 @@ import org.bukkit.Material;
 import org.bukkit.Particle;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.EquipmentSlot;
+import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.PlayerInventory;
 import org.bukkit.inventory.meta.ItemMeta;
@@ -38,10 +39,23 @@ import java.util.concurrent.ConcurrentHashMap;
  * remembering a fixed slot from lock-time. That's deliberate: a player has
  * to be free to reorganize their own inventory (hotbar order, which armor
  * slot, hand swap) while tagged without it breaking restoration or opening
- * a duplication hole. {@link DisguiseProtectionListener} still blocks the
- * two things that actually matter - leaving the inventory entirely (drop,
- * placing as a block) or moving into a DIFFERENT inventory (a chest,
- * another player, a villager trade, ...).
+ * a duplication hole.
+ *
+ * <p>Dropping, partially splitting a stack, and moving into another
+ * (storage-type) inventory - a chest, a barrel, a dispenser, ... - are all
+ * allowed too, not blocked outright the way an earlier version of this
+ * class did. Two mechanisms make that safe: {@link #splitFragment} gives
+ * a departing partial amount its OWN instance id the moment it splits off
+ * (instead of letting Bukkit copy the same id onto both halves, which is
+ * what caused a real duplication bug earlier this session), and
+ * {@link #reconcile} re-derives tracking a tick after any inventory click/
+ * drag that touched a disguised item, re-deriving one independently
+ * restorable fragment per physical location it actually finds the id in.
+ * {@link DisguiseProtectionListener} only still blocks placing a disguise
+ * item as a block (that's functional USE, not just storage) and moving one
+ * into a "consuming" inventory - a villager trade, a furnace, an anvil,
+ * ... - where the item can be removed by a mechanism other than plain
+ * relocation, which reconcile can't reliably see through.
  */
 public final class DisguiseManager {
 
@@ -64,6 +78,11 @@ public final class DisguiseManager {
     // every world - populated the moment a disguised item is dropped (see
     // DisguiseProtectionListener), read/removed here on restore.
     private final Map<String, UUID> droppedInstances = new ConcurrentHashMap<>();
+    // instance id -> the external (non-player) Inventory it was last found
+    // in by reconcile() - a chest, barrel, dispenser, ... - so unlock() can
+    // find and revert it there directly instead of only ever looking in the
+    // player's own inventory or as a dropped entity.
+    private final Map<String, Inventory> externalInstances = new ConcurrentHashMap<>();
     // instance id -> its LockedItem, independent of which player owns it -
     // lets DisguiseProtectionListener answer "would this action split a
     // tracked stack" in O(1) without knowing the owner. See isFullStack.
@@ -153,6 +172,9 @@ public final class DisguiseManager {
             if (restoreDroppedInstance(item)) {
                 continue;
             }
+            if (restoreExternalInstance(item)) {
+                continue;
+            }
             // genuinely couldn't find the disguise item anywhere - already
             // picked up by someone else, burned, despawned, whatever. Never
             // silently lose the real item over it either way: hand the
@@ -165,19 +187,17 @@ public final class DisguiseManager {
         }
     }
 
-    /** Public - {@link DisguiseProtectionListener} uses this to block any
-     * action that would split a tracked stack (partial drop, right-click
-     * "take half", drag-splitting a cursor stack across slots, ...). This
-     * is the actual fix for a real duplication bug found this session: a
-     * disguise item's instance id lives on its {@link ItemMeta}, which
-     * Bukkit happily copies onto BOTH halves of a split stack - once that
-     * happens, unlock() has two fragments claiming the same id and can only
-     * ever find/restore the first one it happens to check, leaving every
-     * other fragment behind forever as an inert, permanently-disguised
-     * orphan. Splitting is blocked outright instead of trying to support
-     * N fragments of one instance id, which would need exhaustive
-     * multi-location bookkeeping for a use case (splitting a locked stack
-     * into two piles) nobody actually needs while tagged. */
+    /** Public - {@link DisguiseProtectionListener} uses this to tell whether
+     * a drop is the WHOLE tracked stack or only part of it, so it knows
+     * whether {@link #splitFragment} needs to run first. A disguise item's
+     * instance id lives on its {@link ItemMeta}, which Bukkit happily
+     * copies onto BOTH halves of any split stack - restoring "the first
+     * slot found" for a shared id used to hand back the FULL original
+     * amount while leaving the other half behind forever as an inert,
+     * permanently-disguised orphan (a real duplication bug found earlier
+     * this session). {@link #splitFragment} is what actually fixes that, by
+     * giving the departing fragment its own independent id the moment it
+     * splits off. */
     public boolean isFullStack(ItemStack item) {
         String instanceId = instanceIdOf(item);
         if (instanceId == null) {
@@ -192,6 +212,63 @@ public final class DisguiseManager {
      * drop is allowed through. */
     public void trackDrop(String instanceId, UUID droppedEntityId) {
         droppedInstances.put(instanceId, droppedEntityId);
+    }
+
+    /** Splits {@code departAmount} off the tracked stack behind
+     * {@code originalInstanceId} into its OWN, independently tracked
+     * fragment - the departing physical stack's id is rewritten to a fresh
+     * one so it no longer collides with whatever's left behind. Used the
+     * moment part of a locked stack is about to leave the player's
+     * inventory (a partial drop, a partial-amount click) instead of
+     * blocking the split outright: Bukkit copies the SAME instance id onto
+     * both halves of any ordinary split, and restoring "the first slot
+     * found" for a shared id used to hand back the FULL original amount
+     * while leaving the other half behind as a permanently-disguised
+     * orphan - the actual duplication bug fixed earlier this session.
+     * Splitting the tracking itself, not just blocking the action, is what
+     * makes partial drops/moves safe instead of merely re-hiding the bug.
+     *
+     * @return the id the departing stack now carries (a fresh one), or the
+     *         original id unchanged if nothing needed splitting.
+     */
+    public String splitFragment(Player player, String originalInstanceId, ItemStack departingStack, int departAmount) {
+        LockedItem original = byInstanceId.get(originalInstanceId);
+        if (original == null || departAmount >= original.original().getAmount()) {
+            return originalInstanceId;
+        }
+        List<LockedItem> items = locked.get(player.getUniqueId());
+        if (items == null) {
+            return originalInstanceId;
+        }
+        int remainAmount = original.original().getAmount() - departAmount;
+        items.remove(original);
+        byInstanceId.remove(originalInstanceId);
+
+        String departId = UUID.randomUUID().toString();
+        ItemStack departOriginal = original.original().clone();
+        departOriginal.setAmount(departAmount);
+        LockedItem departFragment = new LockedItem(departId, departOriginal);
+        items.add(departFragment);
+        byInstanceId.put(departId, departFragment);
+        writeInstanceId(departingStack, departId);
+
+        if (remainAmount > 0) {
+            ItemStack remainOriginal = original.original().clone();
+            remainOriginal.setAmount(remainAmount);
+            // the physical remainder left in inventory keeps carrying the
+            // id it always had - nothing to rewrite on it, only the
+            // tracked amount shrinks.
+            LockedItem remainFragment = new LockedItem(originalInstanceId, remainOriginal);
+            items.add(remainFragment);
+            byInstanceId.put(originalInstanceId, remainFragment);
+        }
+        return departId;
+    }
+
+    private void writeInstanceId(ItemStack stack, String instanceId) {
+        ItemMeta meta = stack.getItemMeta();
+        meta.getPersistentDataContainer().set(instanceKey, PersistentDataType.STRING, instanceId);
+        stack.setItemMeta(meta);
     }
 
     /** O(1) lookup by the dropped entity's own UUID (set at drop time)
@@ -241,6 +318,118 @@ public final class DisguiseManager {
             }
         }
         return false;
+    }
+
+    /** Public - {@link DisguiseProtectionListener} calls this a tick after
+     * any inventory click/drag that touched a disguised item (once Bukkit
+     * has actually applied it - mid-event, nothing's moved yet), instead of
+     * pre-computing exactly where the item is going to land. Re-derives
+     * tracking for the given player's locked items against physical
+     * reality: their own inventory, their cursor, and (if not null) the
+     * external inventory that was open for the click - one independently
+     * restorable fragment per location actually found, so an auto-split
+     * (part of a stack lands in a chest slot, the rest stays behind - one
+     * click, both halves sharing Bukkit's copied id) can never let
+     * restoring one fragment hand back the pre-split total while the other
+     * physical fragment sits forgotten. A location the id genuinely isn't
+     * found in at all (dropped, or moved out of both inventories some
+     * other way) is left exactly as tracked - {@link #unlock}'s existing
+     * dropped/external/fallback chain still covers that later. */
+    public void reconcile(Player player, Inventory external) {
+        List<LockedItem> items = locked.get(player.getUniqueId());
+        if (items == null || items.isEmpty()) {
+            return;
+        }
+        PlayerInventory inv = player.getInventory();
+        for (LockedItem tracked : new ArrayList<>(items)) {
+            List<Fragment> found = new ArrayList<>();
+            collectMatches(inv, tracked.instanceId(), found);
+            ItemStack cursor = player.getItemOnCursor();
+            if (matchesInstance(cursor, tracked.instanceId())) {
+                found.add(new Fragment(cursor, () -> player.setItemOnCursor(cursor), cursor.getAmount(), null));
+            }
+            if (external != null) {
+                collectMatches(external, tracked.instanceId(), found);
+            }
+            if (found.isEmpty()) {
+                continue;
+            }
+            if (found.size() == 1 && found.get(0).amount() == tracked.original().getAmount()) {
+                // whole stack, just possibly relocated.
+                if (found.get(0).externalHome() != null) {
+                    externalInstances.put(tracked.instanceId(), found.get(0).externalHome());
+                } else {
+                    externalInstances.remove(tracked.instanceId());
+                }
+                continue;
+            }
+            // split across more than one physical location (or a single
+            // location holding less than the tracked total) - re-derive
+            // one independent fragment per location actually found.
+            items.remove(tracked);
+            byInstanceId.remove(tracked.instanceId());
+            externalInstances.remove(tracked.instanceId());
+            boolean first = true;
+            for (Fragment fragment : found) {
+                String fragId = first ? tracked.instanceId() : UUID.randomUUID().toString();
+                first = false;
+                if (!fragId.equals(instanceIdOf(fragment.stack()))) {
+                    writeInstanceId(fragment.stack(), fragId);
+                }
+                fragment.writeBack().run();
+                ItemStack fragOriginal = tracked.original().clone();
+                fragOriginal.setAmount(fragment.amount());
+                LockedItem fragmentItem = new LockedItem(fragId, fragOriginal);
+                items.add(fragmentItem);
+                byInstanceId.put(fragId, fragmentItem);
+                if (fragment.externalHome() != null) {
+                    externalInstances.put(fragId, fragment.externalHome());
+                }
+            }
+        }
+    }
+
+    /** Schedules {@link #reconcile} for the next tick - {@link
+     * DisguiseProtectionListener} calls this from an event that fires
+     * BEFORE Bukkit actually applies the click/drag, so looking at where
+     * things ended up has to wait one tick. */
+    public void scheduleReconcile(Player player, Inventory external) {
+        plugin.getServer().getScheduler().runTask(plugin, () -> reconcile(player, external));
+    }
+
+    private void collectMatches(PlayerInventory inv, String instanceId, List<Fragment> out) {
+        for (EquipmentSlot slot : new EquipmentSlot[]{EquipmentSlot.HAND, EquipmentSlot.OFF_HAND,
+                EquipmentSlot.HEAD, EquipmentSlot.CHEST, EquipmentSlot.LEGS, EquipmentSlot.FEET}) {
+            ItemStack stack = inv.getItem(slot);
+            if (matchesInstance(stack, instanceId)) {
+                out.add(new Fragment(stack, () -> inv.setItem(slot, stack), stack.getAmount(), null));
+            }
+        }
+        for (int i = 0; i < inv.getSize(); i++) {
+            ItemStack stack = inv.getItem(i);
+            if (matchesInstance(stack, instanceId)) {
+                int slotIndex = i;
+                out.add(new Fragment(stack, () -> inv.setItem(slotIndex, stack), stack.getAmount(), null));
+            }
+        }
+    }
+
+    private void collectMatches(Inventory inv, String instanceId, List<Fragment> out) {
+        for (int i = 0; i < inv.getSize(); i++) {
+            ItemStack stack = inv.getItem(i);
+            if (matchesInstance(stack, instanceId)) {
+                int slotIndex = i;
+                out.add(new Fragment(stack, () -> inv.setItem(slotIndex, stack), stack.getAmount(), inv));
+            }
+        }
+    }
+
+    /** One physical location a tracked instance id was found in during
+     * {@link #reconcile} - {@code writeBack} commits whatever mutation
+     * (rewriting the id, if this fragment got a fresh one) back to that
+     * exact slot/cursor; {@code externalHome} is null for anything in the
+     * player's own inventory/cursor. */
+    private record Fragment(ItemStack stack, Runnable writeBack, int amount, Inventory externalHome) {
     }
 
     private boolean matchesInstance(ItemStack item, String instanceId) {
@@ -397,10 +586,31 @@ public final class DisguiseManager {
         if (restoreDroppedInstance(item)) {
             return;
         }
+        if (restoreExternalInstance(item)) {
+            return;
+        }
         Map<Integer, ItemStack> overflow = inv.addItem(item.original());
         for (ItemStack leftover : overflow.values()) {
             player.getWorld().dropItemNaturally(player.getLocation(), leftover);
         }
+    }
+
+    /** Mirror of {@link #restoreDroppedInstance} for an item last seen
+     * inside an external (chest/barrel/dispenser/...) inventory via
+     * {@link #reconcile} - a plain linear scan of that inventory's
+     * contents, bounded by its (small, fixed) size. */
+    private boolean restoreExternalInstance(LockedItem item) {
+        Inventory inv = externalInstances.remove(item.instanceId());
+        if (inv == null) {
+            return false;
+        }
+        for (int i = 0; i < inv.getSize(); i++) {
+            if (matchesInstance(inv.getItem(i), item.instanceId())) {
+                inv.setItem(i, item.original());
+                return true;
+            }
+        }
+        return false;
     }
 
     private boolean matchesDisabledItem(ItemStack item, ItemLocation loc) {
@@ -498,11 +708,8 @@ public final class DisguiseManager {
         return material != null ? material : fallback;
     }
 
-    /** Public - used by {@link DisguiseProtectionListener} to block a
-     * disguise item moving into a DIFFERENT inventory (chest, trade,
-     * another player, ...) or being placed as a block, both of which would
-     * separate it from tracking in a way {@link #unlock} can't recover from
-     * cheaply. Dropping is allowed - see {@link #trackDrop}. */
+    /** Public - used by {@link DisguiseProtectionListener} to detect when a
+     * disguised item is involved in a click/drag/drop/placement at all. */
     public boolean isDisguised(ItemStack item) {
         if (item == null) {
             return false;
