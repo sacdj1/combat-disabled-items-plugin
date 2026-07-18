@@ -2,9 +2,10 @@ package dev.sacdj.scdi.combat;
 
 import dev.sacdj.scdi.config.ScdiConfig;
 import dev.sacdj.scdi.disguise.DisguiseManager;
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
+import net.kyori.adventure.title.Title;
 import net.md_5.bungee.api.ChatColor;
-import net.md_5.bungee.api.ChatMessageType;
-import net.md_5.bungee.api.chat.TextComponent;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.scheduler.BukkitTask;
@@ -24,13 +25,20 @@ import java.util.concurrent.ConcurrentHashMap;
  * and rescheduled on retag), instead of a global tick loop checking everyone's
  * remaining time 20x/second the way the datapack equivalent had to.
  *
- * <p>Uses the classic Bukkit/Spigot chat API (ChatColor, spigot().sendMessage,
- * player.sendTitle) rather than Adventure - Adventure's Component/Title/
- * sendActionBar are Paper-only additions and would silently fail to compile
- * (or worse, fail to load) on plain Spigot/CraftBukkit, which defeats the
- * point of targeting the widest possible set of server software.
+ * <p>Sends the actionbar/title via Paper's native Adventure API
+ * ({@code Player#sendActionBar}/{@code #showTitle}) rather than the old
+ * Bukkit/Spigot bridge ({@code player.spigot().sendMessage(ACTION_BAR, ...)})
+ * - that bridge is a legacy compatibility shim that's been quietly losing
+ * functionality release over release as Paper finishes its migration to
+ * Adventure, and on this build it no longer actually puts anything on
+ * screen (the "In Combat" text going missing, even though the code runs
+ * without error). This plugin already commits to Paper-only APIs elsewhere
+ * (Mannequin, {@code ItemMeta#setItemModel}), so there's no portability
+ * reason left to route through the legacy bridge here either.
  */
 public final class CombatManager {
+
+    private static final LegacyComponentSerializer LEGACY = LegacyComponentSerializer.legacySection();
 
     private final JavaPlugin plugin;
     private final ScdiConfig config;
@@ -222,10 +230,18 @@ public final class CombatManager {
 
     private void announceTagged(Player player) {
         if (config.showTitleOnTag()) {
-            player.sendTitle(ChatColor.YELLOW + "Tagged!", "", 0, 20, 10);
+            player.showTitle(Title.title(
+                    LEGACY.deserialize(ChatColor.YELLOW + "Tagged!"),
+                    Component.empty(),
+                    Title.Times.times(Duration.ZERO, Duration.ofMillis(1000), Duration.ofMillis(500))));
         }
         if (config.combatSound() != null) {
             player.playSound(player.getLocation(), config.combatSound(), config.combatVolume(), config.combatPitch());
+        }
+        if (config.showActionBar()) {
+            // don't wait for the next 1/sec tickActionBars pass - show it
+            // the instant they're tagged instead of up to a second late.
+            sendActionBar(player, ChatColor.RED + "⚔ In Combat (" + config.combatDuration().toSeconds() + "s)");
         }
     }
 
@@ -237,6 +253,6 @@ public final class CombatManager {
     }
 
     private void sendActionBar(Player player, String legacyText) {
-        player.spigot().sendMessage(ChatMessageType.ACTION_BAR, TextComponent.fromLegacyText(legacyText));
+        player.sendActionBar(LEGACY.deserialize(legacyText));
     }
 }

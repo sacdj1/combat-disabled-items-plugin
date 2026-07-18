@@ -5,6 +5,7 @@ import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.block.BlockPlaceEvent;
+import org.bukkit.event.entity.EntityPickupItemEvent;
 import org.bukkit.event.inventory.InventoryAction;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
@@ -25,6 +26,14 @@ import java.util.Set;
  * physical fragment independently trackable/restorable no matter where it
  * ends up, rather than this listener trying to prevent every way a stack
  * could split or travel.
+ *
+ * <p>If someone OTHER than the tracked owner picks a dropped disguise item
+ * up first, it reveals to the real item right there for them - see {@link
+ * DisguiseManager#revealForOtherPlayer}. Dropping it already meant losing
+ * it, same as any other item; without this a stranger's pickup would leave
+ * an inert, permanently-disguised decoy in their inventory forever while
+ * the original owner STILL got a fresh replacement handed to them at
+ * unlock.
  *
  * <p>Two things still ARE blocked outright:
  * <ul>
@@ -79,6 +88,14 @@ public final class DisguiseProtectionListener implements Listener {
             event.getItemDrop().setItemStack(dropped);
         }
         disguiseManager.trackDrop(instanceId, event.getItemDrop().getUniqueId());
+    }
+
+    @EventHandler(ignoreCancelled = true)
+    public void onPickup(EntityPickupItemEvent event) {
+        if (!(event.getEntity() instanceof Player picker)) {
+            return;
+        }
+        disguiseManager.revealForOtherPlayer(picker, event.getItem());
     }
 
     @EventHandler(ignoreCancelled = true)

@@ -87,6 +87,10 @@ public final class DisguiseManager {
     // lets DisguiseProtectionListener answer "would this action split a
     // tracked stack" in O(1) without knowing the owner. See isFullStack.
     private final Map<String, LockedItem> byInstanceId = new ConcurrentHashMap<>();
+    // instance id -> the player who owns/tracks it - lets a pickup by
+    // someone ELSE be told apart from the owner just picking their own
+    // dropped item back up. See revealForOtherPlayer.
+    private final Map<String, UUID> instanceOwners = new ConcurrentHashMap<>();
     private BukkitTask flashTask;
     private BukkitTask refreshTask;
     private long flashTickCounter;
@@ -166,6 +170,7 @@ public final class DisguiseManager {
         PlayerInventory inv = player.getInventory();
         for (LockedItem item : items) {
             byInstanceId.remove(item.instanceId());
+            instanceOwners.remove(item.instanceId());
             if (restoreByInstanceId(player, inv, item)) {
                 continue;
             }
@@ -243,6 +248,7 @@ public final class DisguiseManager {
         int remainAmount = original.original().getAmount() - departAmount;
         items.remove(original);
         byInstanceId.remove(originalInstanceId);
+        instanceOwners.remove(originalInstanceId);
 
         String departId = UUID.randomUUID().toString();
         ItemStack departOriginal = original.original().clone();
@@ -250,6 +256,7 @@ public final class DisguiseManager {
         LockedItem departFragment = new LockedItem(departId, departOriginal);
         items.add(departFragment);
         byInstanceId.put(departId, departFragment);
+        instanceOwners.put(departId, player.getUniqueId());
         writeInstanceId(departingStack, departId);
 
         if (remainAmount > 0) {
@@ -261,6 +268,7 @@ public final class DisguiseManager {
             LockedItem remainFragment = new LockedItem(originalInstanceId, remainOriginal);
             items.add(remainFragment);
             byInstanceId.put(originalInstanceId, remainFragment);
+            instanceOwners.put(originalInstanceId, player.getUniqueId());
         }
         return departId;
     }
@@ -269,6 +277,44 @@ public final class DisguiseManager {
         ItemMeta meta = stack.getItemMeta();
         meta.getPersistentDataContainer().set(instanceKey, PersistentDataType.STRING, instanceId);
         stack.setItemMeta(meta);
+    }
+
+    /** Public - {@link DisguiseProtectionListener} calls this the moment a
+     * PLAYER picks up a still-tracked, dropped disguise item. If the picker
+     * is someone OTHER than the tracked owner, dropping it already meant
+     * losing it - same as any other dropped item in the game - so rather
+     * than leaving an inert, permanently-disguised decoy sitting in the
+     * picker's inventory forever (nobody's unlock() would ever find and
+     * revert it, since only the OWNER's locked list ever referenced this
+     * id), it reveals to the real item right there for the picker, and the
+     * owner's tracking is fully released - their own unlock() won't try to
+     * hand them a "couldn't find it" replacement on top of that. Does
+     * nothing (returns false) if the item isn't tracked, or the picker IS
+     * the owner - an owner picking their own dropped item back up already
+     * works correctly through the normal in-inventory restore path.
+     *
+     * @return true if this pickup was a stranger's and got revealed. */
+    public boolean revealForOtherPlayer(Player picker, org.bukkit.entity.Item droppedItem) {
+        String instanceId = instanceIdOf(droppedItem.getItemStack());
+        if (instanceId == null) {
+            return false;
+        }
+        UUID ownerId = instanceOwners.get(instanceId);
+        if (ownerId == null || ownerId.equals(picker.getUniqueId())) {
+            return false;
+        }
+        LockedItem item = byInstanceId.remove(instanceId);
+        instanceOwners.remove(instanceId);
+        droppedInstances.remove(instanceId);
+        externalInstances.remove(instanceId);
+        List<LockedItem> ownerItems = locked.get(ownerId);
+        if (ownerItems != null && item != null) {
+            ownerItems.remove(item);
+        }
+        if (item != null) {
+            droppedItem.setItemStack(item.original());
+        }
+        return true;
     }
 
     /** O(1) lookup by the dropped entity's own UUID (set at drop time)
@@ -368,6 +414,7 @@ public final class DisguiseManager {
             // one independent fragment per location actually found.
             items.remove(tracked);
             byInstanceId.remove(tracked.instanceId());
+            instanceOwners.remove(tracked.instanceId());
             externalInstances.remove(tracked.instanceId());
             boolean first = true;
             for (Fragment fragment : found) {
@@ -381,6 +428,7 @@ public final class DisguiseManager {
                 fragOriginal.setAmount(fragment.amount());
                 LockedItem fragmentItem = new LockedItem(fragId, fragOriginal);
                 items.add(fragmentItem);
+                instanceOwners.put(fragId, player.getUniqueId());
                 byInstanceId.put(fragId, fragmentItem);
                 if (fragment.externalHome() != null) {
                     externalInstances.put(fragId, fragment.externalHome());
@@ -540,6 +588,7 @@ public final class DisguiseManager {
         LockedItem lockedItem = new LockedItem(instanceId, current.clone());
         items.add(lockedItem);
         byInstanceId.put(instanceId, lockedItem);
+        instanceOwners.put(instanceId, player.getUniqueId());
         loc.write(inv, buildDisguiseItem(loc, current.getAmount(), instanceId));
 
         if (loc instanceof ItemLocation.Equipment eq && ARMOR_SUFFIX.containsKey(eq.slot())) {
@@ -570,6 +619,7 @@ public final class DisguiseManager {
 
     private void restoreSingleItem(Player player, String instanceId) {
         LockedItem item = byInstanceId.remove(instanceId);
+        instanceOwners.remove(instanceId);
         if (item == null) {
             // already gone - full unlock() (release/death/quit) beat this
             // timer to it.
