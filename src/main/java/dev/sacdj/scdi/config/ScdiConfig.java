@@ -1,7 +1,9 @@
 package dev.sacdj.scdi.config;
 
+import org.bukkit.ChatColor;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
+import org.bukkit.Particle;
 import org.bukkit.Sound;
 import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.configuration.file.YamlConfiguration;
@@ -154,6 +156,35 @@ public final class ScdiConfig {
         return cfg.getBoolean("disabled-items.scan-full-inventory", true);
     }
 
+    /** 0 means "use combat.duration-ms" (the global timer). */
+    public long fireworkRocketDurationMs() {
+        return cfg.getLong("disabled-items.firework-rocket-duration-ms", 0);
+    }
+
+    public long windChargeDurationMs() {
+        return cfg.getLong("disabled-items.wind-charge-duration-ms", 0);
+    }
+
+    public long elytraDurationMs() {
+        return cfg.getLong("disabled-items.elytra-duration-ms", 0);
+    }
+
+    /** 0 means "no override, use combat.duration-ms" - the only materials
+     * with a configurable override are the three built-ins above, since
+     * custom-items rules don't carry their own duration field. */
+    public long itemDurationOverrideMs(Material type) {
+        if (type == Material.FIREWORK_ROCKET) {
+            return fireworkRocketDurationMs();
+        }
+        if (type == Material.WIND_CHARGE) {
+            return windChargeDurationMs();
+        }
+        if (type == Material.ELYTRA) {
+            return elytraDurationMs();
+        }
+        return 0;
+    }
+
     /** Extra held items to disable, beyond the built-ins above - each entry
      * is {material: "ENDER_PEARL"} under disabled-items.custom-items. */
     /** A rule matches an item if EVERY non-null field matches - material
@@ -251,6 +282,22 @@ public final class ScdiConfig {
         return cfg.getString("disguise.name", "Items Disabled!");
     }
 
+    public ChatColor disguiseNameColor() {
+        try {
+            return ChatColor.valueOf(cfg.getString("disguise.name-color", "RED").toUpperCase(java.util.Locale.ROOT));
+        } catch (IllegalArgumentException e) {
+            return ChatColor.RED;
+        }
+    }
+
+    public boolean disguiseNameBold() {
+        return cfg.getBoolean("disguise.name-bold", true);
+    }
+
+    public boolean disguiseNameItalic() {
+        return cfg.getBoolean("disguise.name-italic", false);
+    }
+
     public boolean disguiseGlint() {
         return cfg.getBoolean("disguise.glint", true);
     }
@@ -265,6 +312,23 @@ public final class ScdiConfig {
 
     public long disguiseArmorFlashIntervalTicks() {
         return cfg.getLong("disguise.armor-flash-interval-ticks", 6);
+    }
+
+    /** Packed 24-bit RGB, same representation minecraft:dyed_color uses. */
+    public org.bukkit.Color disguiseArmorFlashColorA() {
+        return org.bukkit.Color.fromRGB(cfg.getInt("disguise.armor-flash-color-a", 16711680));
+    }
+
+    public org.bukkit.Color disguiseArmorFlashColorB() {
+        return org.bukkit.Color.fromRGB(cfg.getInt("disguise.armor-flash-color-b", 16776960));
+    }
+
+    public boolean disguiseArmorRecolor() {
+        return cfg.getBoolean("disguise.armor-recolor", false);
+    }
+
+    public Sound disguiseArmorEquipSound() {
+        return soundOrNull(cfg.getString("disguise.armor-equip-sound", "block.candle.extinguish"));
     }
 
     // ---- warnings ----
@@ -385,6 +449,14 @@ public final class ScdiConfig {
         return cfg.getBoolean("dummy.immobile", true);
     }
 
+    public boolean dummyPinnedDefault() {
+        return cfg.getBoolean("dummy.pinned-default", false);
+    }
+
+    public boolean dummyNoGravity() {
+        return cfg.getBoolean("dummy.no-gravity", false);
+    }
+
     public boolean dummyLookAtPlayer() {
         return cfg.getBoolean("dummy.look-at-player", true);
     }
@@ -429,6 +501,52 @@ public final class ScdiConfig {
         return cfg.getBoolean("dummy.pickup-items", false);
     }
 
+    public double dummyAnnounceRange() {
+        return cfg.getDouble("dummy.announce-range", 24.0);
+    }
+
+    public boolean dummyAnnounceCheatedDeath() {
+        return cfg.getBoolean("dummy.announce-cheated-death", false);
+    }
+
+    public boolean dummyExtinguishInCombat() {
+        return cfg.getBoolean("dummy.extinguish-in-combat", false);
+    }
+
+    public boolean dummyExtinguishOnCheatDeath() {
+        return cfg.getBoolean("dummy.extinguish-on-cheat-death", true);
+    }
+
+    public boolean dummyCheatDeathInvulnerability() {
+        return cfg.getBoolean("dummy.cheat-death-invulnerability", false);
+    }
+
+    public long dummyCheatDeathInvulnerabilityTicks() {
+        return cfg.getLong("dummy.cheat-death-invulnerability-ticks", 20);
+    }
+
+    public boolean dummyCheatDeathSoundTotem() {
+        return cfg.getBoolean("dummy.cheat-death-sound-totem", true);
+    }
+
+    public boolean dummyCheatDeathSoundAllay() {
+        return cfg.getBoolean("dummy.cheat-death-sound-allay", true);
+    }
+
+    public Particle dummyCheatDeathParticle() {
+        String id = cfg.getString("dummy.cheat-death-particle", "minecraft:electric_spark");
+        String path = id.startsWith("minecraft:") ? id.substring("minecraft:".length()) : id;
+        try {
+            return Particle.valueOf(path.toUpperCase(java.util.Locale.ROOT));
+        } catch (IllegalArgumentException e) {
+            return Particle.ELECTRIC_SPARK;
+        }
+    }
+
+    public long dummyDpsWindowTicks() {
+        return Math.max(1, cfg.getLong("dummy.dps-window-ticks", 40));
+    }
+
     // ---- sounds ----
 
     public Sound combatSound() {
@@ -439,12 +557,20 @@ public final class ScdiConfig {
         return (float) cfg.getDouble("sounds.combat-pitch", 0.5);
     }
 
+    public float combatVolume() {
+        return (float) cfg.getDouble("sounds.combat-volume", 1.0);
+    }
+
     public Sound safeSound() {
         return soundOrNull(cfg.getString("sounds.safe", "block.note_block.bit"));
     }
 
     public float safePitch() {
         return (float) cfg.getDouble("sounds.safe-pitch", 1.0);
+    }
+
+    public float safeVolume() {
+        return (float) cfg.getDouble("sounds.safe-volume", 1.0);
     }
 
     // ---- display ----
@@ -459,6 +585,10 @@ public final class ScdiConfig {
 
     public boolean showTimerAboveHead() {
         return cfg.getBoolean("display.show-timer-above-head", false);
+    }
+
+    public boolean showTeamOnTab() {
+        return cfg.getBoolean("display.show-team-on-tab", false);
     }
 
     private static Sound soundOrNull(String key) {

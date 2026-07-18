@@ -52,6 +52,7 @@ public final class DummyManager {
     private BukkitTask regenTask;
     private BukkitTask lookTask;
     private BukkitTask pickupTask;
+    private BukkitTask pinTask;
     private long regenTickCounter;
     private long lookTickCounter;
     private final Map<UUID, Long> pickupCooldownUntil = new ConcurrentHashMap<>();
@@ -66,6 +67,7 @@ public final class DummyManager {
         regenTask = plugin.getServer().getScheduler().runTaskTimer(plugin, this::tickRegen, 0L, 1L);
         lookTask = plugin.getServer().getScheduler().runTaskTimer(plugin, this::tickLook, 0L, 1L);
         pickupTask = plugin.getServer().getScheduler().runTaskTimer(plugin, this::tickPickup, 0L, 10L);
+        pinTask = plugin.getServer().getScheduler().runTaskTimer(plugin, this::tickPin, 0L, 1L);
     }
 
     public void stop() {
@@ -77,6 +79,37 @@ public final class DummyManager {
         }
         if (pickupTask != null) {
             pickupTask.cancel();
+        }
+        if (pinTask != null) {
+            pinTask.cancel();
+        }
+    }
+
+    /** pinned is STRONGER than immobile (see config.yml) - teleports the
+     * dummy back to its exact spawn position every tick, resisting anything
+     * physical (pistons, currents, explosions) that immobile's knockback
+     * dampening alone wouldn't stop. Skipped entirely (not even an iteration)
+     * when nothing's pinned, so this costs nothing on a server with pinning
+     * turned off. */
+    private void tickPin() {
+        if (dummies.isEmpty()) {
+            return;
+        }
+        for (Map.Entry<UUID, DummyState> entry : dummies.entrySet()) {
+            DummyState state = entry.getValue();
+            if (!state.pinned || state.spawnLocation == null) {
+                continue;
+            }
+            Entity entity = plugin.getServer().getEntity(entry.getKey());
+            if (!(entity instanceof Mannequin dummy)) {
+                continue;
+            }
+            Location loc = dummy.getLocation();
+            Location home = state.spawnLocation;
+            if (loc.getX() != home.getX() || loc.getY() != home.getY() || loc.getZ() != home.getZ()) {
+                dummy.teleport(new Location(home.getWorld(), home.getX(), home.getY(), home.getZ(),
+                        loc.getYaw(), loc.getPitch()));
+            }
         }
     }
 
@@ -108,6 +141,7 @@ public final class DummyManager {
 
         Mannequin dummy = requester.getWorld().spawn(loc, Mannequin.class, m -> {
             m.setImmovable(config.dummyImmobile());
+            m.setGravity(!config.dummyNoGravity());
             AttributeInstance maxHealth = m.getAttribute(Attribute.MAX_HEALTH);
             if (maxHealth != null) {
                 maxHealth.setBaseValue(config.dummyMaxHealth());
@@ -119,6 +153,8 @@ public final class DummyManager {
         DummyState state = new DummyState(requester.getUniqueId());
         state.simHp = config.dummyOneShotDamage();
         state.invincible = config.dummyInvincibleDefault();
+        state.pinned = config.dummyPinnedDefault();
+        state.spawnLocation = dummy.getLocation().clone();
         state.lastHitMillis = now;
         dummies.put(dummy.getUniqueId(), state);
 
@@ -167,19 +203,33 @@ public final class DummyManager {
         }
         event.setCancelled(true);
 
+        long now = System.currentTimeMillis();
+        if (now < state.invulnerableUntilMillis) {
+            // cheat-death-invulnerability window, mirrors a real player's
+            // brief post-respawn immunity - damage is fully ignored, not
+            // just reduced, same as event.setCancelled above already does
+            // for everything else.
+            return;
+        }
+
         double damage = event.getFinalDamage();
         if (damage <= 0) {
             return;
         }
         boolean firstHit = state.hitThisEncounter.compareAndSet(false, true);
         if (firstHit) {
-            state.encounterStartMillis = System.currentTimeMillis();
+            state.encounterStartMillis = now;
+            state.damageThisEncounter = 0;
         }
         if (config.dummyDamageNumbers()) {
             spawnDamagePopup(dummy, damage);
         }
-        state.lastHitMillis = System.currentTimeMillis();
+        if (config.dummyExtinguishInCombat() && dummy.getFireTicks() > 0) {
+            dummy.setFireTicks(0);
+        }
+        state.lastHitMillis = now;
         state.simHp -= damage;
+        state.damageThisEncounter += damage;
         dummy.setHealth(Math.max(1.0, dummy.getHealth() - damage));
 
         if (state.simHp <= 0) {
@@ -198,8 +248,26 @@ public final class DummyManager {
         double max = maxHealth != null ? maxHealth.getValue() : config.dummyMaxHealth();
         dummy.setHealth(max);
         state.simHp = config.dummyOneShotDamage();
-        dummy.getWorld().spawnParticle(Particle.TOTEM_OF_UNDYING, dummy.getLocation().add(0, 1, 0), 25);
-        dummy.getWorld().playSound(dummy.getLocation(), org.bukkit.Sound.ITEM_TOTEM_USE, 1.0f, 1.0f);
+        state.damageThisEncounter = 0;
+
+        if (config.dummyExtinguishOnCheatDeath() && dummy.getFireTicks() > 0) {
+            dummy.setFireTicks(0);
+        }
+        if (config.dummyCheatDeathInvulnerability()) {
+            state.invulnerableUntilMillis = System.currentTimeMillis()
+                    + config.dummyCheatDeathInvulnerabilityTicks() * 50L;
+        }
+
+        dummy.getWorld().spawnParticle(config.dummyCheatDeathParticle(), dummy.getLocation().add(0, 1, 0), 25);
+        if (config.dummyCheatDeathSoundTotem()) {
+            dummy.getWorld().playSound(dummy.getLocation(), org.bukkit.Sound.ITEM_TOTEM_USE, 1.0f, 1.0f);
+        }
+        if (config.dummyCheatDeathSoundAllay()) {
+            dummy.getWorld().playSound(dummy.getLocation(), org.bukkit.Sound.ENTITY_ALLAY_ITEM_GIVEN, 1.0f, 1.0f);
+        }
+        if (config.dummyAnnounceCheatedDeath()) {
+            broadcastNear(dummy.getLocation(), ChatColor.LIGHT_PURPLE + "A test dummy cheated death!");
+        }
     }
 
     private void killDummy(Mannequin dummy, DummyState state, boolean wasOneShot) {
@@ -213,15 +281,34 @@ public final class DummyManager {
         }
 
         if (wasOneShot && config.dummyAnnounceOneShot()) {
-            Bukkit.broadcastMessage(ChatColor.GOLD + "" + ChatColor.BOLD + "ONE SHOT" + ChatColor.RESET
+            broadcastNear(dummy.getLocation(), ChatColor.GOLD + "" + ChatColor.BOLD + "ONE SHOT" + ChatColor.RESET
                     + ChatColor.GRAY + " - a test dummy went down in a single hit!");
         }
         if (config.dummyAnnounceTimeToKill() && state.encounterStartMillis > 0) {
             double seconds = (System.currentTimeMillis() - state.encounterStartMillis) / 1000.0;
-            Bukkit.broadcastMessage(ChatColor.GRAY + String.format("Dummy killed in %.2fs", seconds));
+            broadcastNear(dummy.getLocation(), ChatColor.GRAY + String.format("Dummy killed in %.2fs", seconds));
         }
 
         remove(dummy);
+    }
+
+    /** dummy.announce-range - chat announcements (one-shot, time-to-kill,
+     * cheated-death) only reach players within this many blocks of the
+     * dummy, instead of the whole server, which gets noisy fast with more
+     * than one dummy/fight going at once. 0 or negative falls back to a
+     * true server-wide broadcast (matches the old unconditional behavior). */
+    private void broadcastNear(Location origin, String message) {
+        double range = config.dummyAnnounceRange();
+        if (range <= 0) {
+            Bukkit.broadcastMessage(message);
+            return;
+        }
+        double rangeSq = range * range;
+        for (Player player : origin.getWorld().getPlayers()) {
+            if (player.getLocation().distanceSquared(origin) <= rangeSq) {
+                player.sendMessage(message);
+            }
+        }
     }
 
     /** Brief RPG-style "-N" popup on every hit - a one-off TextDisplay,
@@ -266,7 +353,29 @@ public final class DummyManager {
         }
         AttributeInstance maxHealth = dummy.getAttribute(Attribute.MAX_HEALTH);
         double max = maxHealth != null ? maxHealth.getValue() : config.dummyMaxHealth();
-        display.setText(ChatColor.WHITE + String.format("%.0f / %.0f", dummy.getHealth(), max));
+        String text = ChatColor.WHITE + String.format("%.0f / %.0f", dummy.getHealth(), max);
+        double dps = liveDps(state);
+        if (dps > 0) {
+            text += ChatColor.GRAY + "  " + ChatColor.RED + String.format("%.1f DPS", dps);
+        }
+        display.setText(text);
+    }
+
+    /** Averages damage taken THIS encounter over at least dps-window-ticks,
+     * even right when the encounter just started - without that floor, one
+     * hit divided by however few ticks have actually passed extrapolates
+     * into a wildly inflated instantaneous rate (e.g. one 4-damage hit on
+     * tick 1 alone would read as 80 DPS). */
+    private double liveDps(DummyState state) {
+        if (state.encounterStartMillis <= 0 || state.damageThisEncounter <= 0) {
+            return 0;
+        }
+        long elapsedTicks = (System.currentTimeMillis() - state.encounterStartMillis) / 50;
+        long effectiveTicks = Math.max(config.dummyDpsWindowTicks(), elapsedTicks);
+        if (effectiveTicks <= 0) {
+            return 0;
+        }
+        return state.damageThisEncounter / (effectiveTicks / 20.0);
     }
 
     private void tickRegen() {
@@ -303,6 +412,8 @@ public final class DummyManager {
             }
             if (dummy.getHealth() >= max) {
                 state.hitThisEncounter.set(false);
+                state.encounterStartMillis = 0;
+                state.damageThisEncounter = 0;
             }
             updateHealthDisplay(dummy, state);
         }
@@ -412,8 +523,12 @@ public final class DummyManager {
         final UUID ownerId;
         double simHp;
         boolean invincible;
+        boolean pinned;
+        Location spawnLocation;
         long lastHitMillis;
         long encounterStartMillis;
+        double damageThisEncounter;
+        long invulnerableUntilMillis;
         final java.util.concurrent.atomic.AtomicBoolean hitThisEncounter = new java.util.concurrent.atomic.AtomicBoolean(false);
         UUID healthDisplayId;
 

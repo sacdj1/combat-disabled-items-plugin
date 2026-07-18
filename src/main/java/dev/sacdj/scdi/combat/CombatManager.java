@@ -225,14 +225,14 @@ public final class CombatManager {
             player.sendTitle(ChatColor.YELLOW + "Tagged!", "", 0, 20, 10);
         }
         if (config.combatSound() != null) {
-            player.playSound(player.getLocation(), config.combatSound(), 1.0f, config.combatPitch());
+            player.playSound(player.getLocation(), config.combatSound(), config.combatVolume(), config.combatPitch());
         }
     }
 
     private void announceReleased(Player player) {
         sendActionBar(player, ChatColor.GREEN + "✔ Combat over - items re-enabled");
         if (config.safeSound() != null) {
-            player.playSound(player.getLocation(), config.safeSound(), 1.0f, config.safePitch());
+            player.playSound(player.getLocation(), config.safeSound(), config.safeVolume(), config.safePitch());
         }
     }
 

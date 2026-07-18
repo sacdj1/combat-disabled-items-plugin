@@ -89,7 +89,36 @@ public final class ConfigSchema {
             new Field("dummy.announce-time-to-kill", Type.BOOLEAN),
             new Field("dummy.pickup-items", Type.BOOLEAN),
             new Field("display.show-timer-above-head", Type.BOOLEAN),
-            new Field("disguise.model", Type.STRING)
+            new Field("disguise.model", Type.STRING),
+
+            // appended for the datapack-parity pass (disguise cosmetics,
+            // per-item durations, dummy cheat-death/pin/gravity, sound
+            // volumes, tab team display) - see the class comment.
+            new Field("disguise.name-color", Type.STRING),
+            new Field("disguise.name-bold", Type.BOOLEAN),
+            new Field("disguise.name-italic", Type.BOOLEAN),
+            new Field("disguise.armor-flash-color-a", Type.LONG),
+            new Field("disguise.armor-flash-color-b", Type.LONG),
+            new Field("disguise.armor-recolor", Type.BOOLEAN),
+            new Field("disguise.armor-equip-sound", Type.STRING),
+            new Field("disabled-items.firework-rocket-duration-ms", Type.LONG),
+            new Field("disabled-items.wind-charge-duration-ms", Type.LONG),
+            new Field("disabled-items.elytra-duration-ms", Type.LONG),
+            new Field("dummy.pinned-default", Type.BOOLEAN),
+            new Field("dummy.no-gravity", Type.BOOLEAN),
+            new Field("dummy.announce-range", Type.DOUBLE),
+            new Field("dummy.announce-cheated-death", Type.BOOLEAN),
+            new Field("dummy.extinguish-in-combat", Type.BOOLEAN),
+            new Field("dummy.extinguish-on-cheat-death", Type.BOOLEAN),
+            new Field("dummy.cheat-death-invulnerability", Type.BOOLEAN),
+            new Field("dummy.cheat-death-invulnerability-ticks", Type.LONG),
+            new Field("dummy.cheat-death-sound-totem", Type.BOOLEAN),
+            new Field("dummy.cheat-death-sound-allay", Type.BOOLEAN),
+            new Field("dummy.cheat-death-particle", Type.STRING),
+            new Field("dummy.dps-window-ticks", Type.LONG),
+            new Field("sounds.combat-volume", Type.DOUBLE),
+            new Field("sounds.safe-volume", Type.DOUBLE),
+            new Field("display.show-team-on-tab", Type.BOOLEAN)
     );
 
     private ConfigSchema() {

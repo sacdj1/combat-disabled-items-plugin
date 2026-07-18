@@ -23,6 +23,12 @@ disabled-items:
   # each entry: {material: "ENDER_PEARL"} - any extra held item to disable
   # while tagged, on top of the built-ins above
   custom-items: []
+  # per-item override for how long THIS item stays disabled, in ms - 0
+  # means "use combat.duration-ms" (the default/global timer). Still
+  # starts/resets from the same tag/retag moment as everything else.
+  firework-rocket-duration-ms: 0
+  wind-charge-duration-ms: 0
+  elytra-duration-ms: 0
 
 disguise:
   item: "minecraft:stick"
@@ -32,6 +38,9 @@ disguise:
   # no command-relay tricks needed the way the datapack had to.
   model: "minecraft:barrier"
   name: "Items Disabled!"
+  name-color: "red"
+  name-bold: true
+  name-italic: false
   glint: true
   # what disguised worn armor looks like (helmet/chestplate/leggings/boots
   # of this material render correctly in the armor slot; disguise.item
@@ -40,6 +49,16 @@ disguise:
   armor-material: "LEATHER"
   armor-flash: true
   armor-flash-interval-ticks: 6
+  # packed 24-bit RGB (e.g. 16711680 = red, 16776960 = yellow) - the flash
+  # particle color cycles between these two.
+  armor-flash-color-a: 16711680
+  armor-flash-color-b: 16776960
+  # whether the worn armor ITSELF also recolors on every flash phase, not
+  # just the particles - every attempt to make this silent failed (no real
+  # vanilla sound is silent by nature), so turning this on means accepting
+  # armor-equip-sound plays on every color change. Off by default.
+  armor-recolor: false
+  armor-equip-sound: "block.candle.extinguish"
 
 warnings:
   armor-warning: true
@@ -77,6 +96,12 @@ dummy:
   one-shot-damage: 20.0
   invincible-default: false
   immobile: true
+  # pinned is STRONGER than immobile - immobile only dampens combat
+  # knockback (Attribute.KNOCKBACK_RESISTANCE-equivalent), pinned
+  # teleports the dummy back to its exact spawn position every tick,
+  # resisting pistons/currents/anything physical too.
+  pinned-default: false
+  no-gravity: false
   look-at-player: true
   look-range: 5.0
   regen-enabled: true
@@ -87,15 +112,41 @@ dummy:
   damage-numbers: true
   announce-one-shot: true
   announce-time-to-kill: true
+  # chat announcements (one-shot, time-to-kill, cheated-death) only reach
+  # players within this many blocks - used to broadcast server-wide, which
+  # gets noisy fast with more than one dummy/fight going at once.
+  announce-range: 24.0
+  announce-cheated-death: false
   pickup-items: false
+  # whether a NEW dummy self-extinguishes when on fire - either while in
+  # its own combat lock, or specifically right after cheating death (a
+  # fresh "life" putting itself out along with everything else resetting).
+  extinguish-in-combat: false
+  extinguish-on-cheat-death: true
+  # brief damage immunity right after cheating death, same idea as a real
+  # player's post-respawn invulnerability. Off by default since cheating
+  # death can happen frequently in sustained combat.
+  cheat-death-invulnerability: false
+  cheat-death-invulnerability-ticks: 20
+  cheat-death-sound-totem: true
+  cheat-death-sound-allay: true
+  cheat-death-particle: "minecraft:electric_spark"
+  # live DPS readout on the health display averages damage over at least
+  # this many ticks, even right after a fresh encounter's first hit -
+  # without a floor, one hit divided by however few ticks have passed
+  # extrapolates into a wildly inflated instantaneous rate.
+  dps-window-ticks: 40
 
 sounds:
   combat: "block.note_block.bit"
   combat-pitch: 0.5
+  combat-volume: 1.0
   safe: "block.note_block.bit"
   safe-pitch: 1.0
+  safe-volume: 1.0
 
 display:
   actionbar: true
   title-on-tag: true
   show-timer-above-head: false
+  show-team-on-tab: false

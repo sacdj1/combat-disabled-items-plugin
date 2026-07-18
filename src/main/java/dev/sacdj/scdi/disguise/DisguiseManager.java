@@ -266,6 +266,11 @@ public final class DisguiseManager {
         lock(player);
     }
 
+    // A/B/A/A cycle (color A is 3x as common as B), matching the datapack's
+    // own flash pattern - per-player so different players' fights don't
+    // desync each other's phase.
+    private final Map<UUID, Integer> flashPhase = new ConcurrentHashMap<>();
+
     private void tickFlash() {
         if (!config.disguiseArmorFlash() || locked.isEmpty()) {
             return;
@@ -279,11 +284,45 @@ public final class DisguiseManager {
             if (player == null || !player.isOnline()) {
                 continue;
             }
-            if (hasDisguisedArmor(player)) {
-                Location loc = player.getLocation().add(0, 1, 0);
-                player.getWorld().spawnParticle(Particle.DUST, loc, 6, 0.3, 0.5, 0.3,
-                        new Particle.DustOptions(org.bukkit.Color.RED, 1.0f));
+            if (!hasDisguisedArmor(player)) {
+                continue;
             }
+            int phase = flashPhase.merge(id, 1, (old, one) -> (old + 1) % 4);
+            org.bukkit.Color color = phase == 1 ? config.disguiseArmorFlashColorB() : config.disguiseArmorFlashColorA();
+
+            Location loc = player.getLocation().add(0, 1, 0);
+            player.getWorld().spawnParticle(Particle.DUST, loc, 6, 0.3, 0.5, 0.3,
+                    new Particle.DustOptions(color, 1.0f));
+
+            if (config.disguiseArmorRecolor()) {
+                recolorDisguisedArmor(player, color);
+            }
+        }
+    }
+
+    /** Opt-in (disguise.armor-recolor, off by default) - recolors the worn
+     * disguise armor itself on top of the particle flash, for materials
+     * that actually support dyeing (LeatherArmorMeta). Every attempt to
+     * make this silent failed - no real vanilla sound is silent by nature -
+     * so this plays disguise.armor-equip-sound each time instead of
+     * pretending it's free. */
+    private void recolorDisguisedArmor(Player player, org.bukkit.Color color) {
+        PlayerInventory inv = player.getInventory();
+        boolean changed = false;
+        for (EquipmentSlot slot : new EquipmentSlot[]{EquipmentSlot.HEAD, EquipmentSlot.CHEST, EquipmentSlot.LEGS, EquipmentSlot.FEET}) {
+            ItemStack item = inv.getItem(slot);
+            if (item == null || !isDisguised(item)) {
+                continue;
+            }
+            if (item.getItemMeta() instanceof org.bukkit.inventory.meta.LeatherArmorMeta leatherMeta) {
+                leatherMeta.setColor(color);
+                item.setItemMeta(leatherMeta);
+                inv.setItem(slot, item);
+                changed = true;
+            }
+        }
+        if (changed) {
+            player.playSound(player.getLocation(), config.disguiseArmorEquipSound(), 1.0f, 1.0f);
         }
     }
 
@@ -319,6 +358,49 @@ public final class DisguiseManager {
         } else {
             warnings.maybeWarnInventory(player);
         }
+
+        long overrideMs = config.itemDurationOverrideMs(current.getType());
+        if (overrideMs > 0) {
+            scheduleIndividualExpiry(player, instanceId, overrideMs);
+        }
+    }
+
+    /** disabled-items.*-duration-ms lets a specific item type re-enable
+     * earlier (or later) than the rest of the player's combat tag - e.g. a
+     * firework rocket back in 3s while everything else stays locked for the
+     * full 10s. Runs from the moment THIS item got locked, independent of
+     * any later retag of the overall combat timer. Fires unconditionally;
+     * {@link #restoreSingleItem} is the one that checks whether there's
+     * still anything to do (a no-op if the whole player already got
+     * unlocked, or this exact item was already individually restored). */
+    private void scheduleIndividualExpiry(Player player, String instanceId, long durationMs) {
+        long ticks = Math.max(1, durationMs / 50);
+        plugin.getServer().getScheduler().runTaskLater(plugin,
+                () -> restoreSingleItem(player, instanceId), ticks);
+    }
+
+    private void restoreSingleItem(Player player, String instanceId) {
+        LockedItem item = byInstanceId.remove(instanceId);
+        if (item == null) {
+            // already gone - full unlock() (release/death/quit) beat this
+            // timer to it.
+            return;
+        }
+        List<LockedItem> items = locked.get(player.getUniqueId());
+        if (items != null) {
+            items.remove(item);
+        }
+        PlayerInventory inv = player.getInventory();
+        if (restoreByInstanceId(player, inv, item)) {
+            return;
+        }
+        if (restoreDroppedInstance(item)) {
+            return;
+        }
+        Map<Integer, ItemStack> overflow = inv.addItem(item.original());
+        for (ItemStack leftover : overflow.values()) {
+            player.getWorld().dropItemNaturally(player.getLocation(), leftover);
+        }
     }
 
     private boolean matchesDisabledItem(ItemStack item, ItemLocation loc) {
@@ -345,6 +427,19 @@ public final class DisguiseManager {
         return false;
     }
 
+    private String formattedDisguiseName() {
+        StringBuilder name = new StringBuilder();
+        name.append(config.disguiseNameColor());
+        if (config.disguiseNameBold()) {
+            name.append(ChatColor.BOLD);
+        }
+        if (config.disguiseNameItalic()) {
+            name.append(ChatColor.ITALIC);
+        }
+        name.append(config.disguiseDisplayName());
+        return name.toString();
+    }
+
     private ItemStack buildDisguiseItem(ItemLocation loc, int amount, String instanceId) {
         if (loc instanceof ItemLocation.Equipment eq && ARMOR_SUFFIX.containsKey(eq.slot())) {
             return buildDisguiseArmorItem(eq.slot(), amount, instanceId);
@@ -352,7 +447,7 @@ public final class DisguiseManager {
         Material material = resolveMaterial(config.disguiseItemKey(), Material.STICK);
         ItemStack disguise = new ItemStack(material, amount);
         ItemMeta meta = disguise.getItemMeta();
-        meta.setDisplayName(ChatColor.RED + config.disguiseDisplayName());
+        meta.setDisplayName(formattedDisguiseName());
         meta.setEnchantmentGlintOverride(config.disguiseGlint());
         // purely visual (minecraft:item_model) - the item's real type above
         // is what disable it functionally works against, this just changes
@@ -383,7 +478,7 @@ public final class DisguiseManager {
         }
         ItemStack disguise = new ItemStack(material != null ? material : Material.STICK, 1);
         ItemMeta meta = disguise.getItemMeta();
-        meta.setDisplayName(ChatColor.RED + config.disguiseDisplayName());
+        meta.setDisplayName(formattedDisguiseName());
         meta.setEnchantmentGlintOverride(config.disguiseGlint());
         NamespacedKey modelKey = config.disguiseModelKey();
         if (modelKey != null) {
