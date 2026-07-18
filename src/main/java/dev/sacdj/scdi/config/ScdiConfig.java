@@ -5,6 +5,9 @@ import org.bukkit.NamespacedKey;
 import org.bukkit.Sound;
 import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.configuration.file.YamlConfiguration;
+import org.bukkit.enchantments.Enchantment;
+import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.io.InputStream;
@@ -12,10 +15,8 @@ import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
-import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 /**
  * Thin typed wrapper over config.yml. Reload-safe: {@link #reload()} re-reads
@@ -155,39 +156,78 @@ public final class ScdiConfig {
 
     /** Extra held items to disable, beyond the built-ins above - each entry
      * is {material: "ENDER_PEARL"} under disabled-items.custom-items. */
-    public Set<Material> customDisabledItems() {
+    /** A rule matches an item if EVERY non-null field matches - material
+     * alone ("any diamond sword"), enchantment alone ("anything with
+     * Sharpness, regardless of type"), or both together ("specifically a
+     * bow enchanted with Power", distinct from disabling all bows). */
+    public record CustomItemRule(Material material, Enchantment enchantment) {
+        public boolean matches(ItemStack item) {
+            if (material != null && item.getType() != material) {
+                return false;
+            }
+            if (enchantment != null) {
+                ItemMeta meta = item.getItemMeta();
+                if (meta == null || !meta.hasEnchant(enchantment)) {
+                    return false;
+                }
+            }
+            return material != null || enchantment != null;
+        }
+
+        Map<String, Object> toMap() {
+            Map<String, Object> map = new java.util.LinkedHashMap<>();
+            if (material != null) {
+                map.put("material", material.name());
+            }
+            if (enchantment != null) {
+                map.put("enchantment", enchantment.getKey().getKey());
+            }
+            return map;
+        }
+    }
+
+    public List<CustomItemRule> customDisabledItems() {
         List<Map<?, ?>> entries = cfg.getMapList("disabled-items.custom-items");
-        Set<Material> materials = EnumSet.noneOf(Material.class);
+        List<CustomItemRule> rules = new ArrayList<>();
         for (Map<?, ?> entry : entries) {
-            Object raw = entry.get("material");
-            if (raw == null) {
+            Object rawMaterial = entry.get("material");
+            Material material = rawMaterial == null ? null : Material.matchMaterial(String.valueOf(rawMaterial));
+            Object rawEnchant = entry.get("enchantment");
+            Enchantment enchantment = rawEnchant == null ? null : resolveEnchantment(String.valueOf(rawEnchant));
+            if (material == null && enchantment == null) {
                 continue;
             }
-            Material material = Material.matchMaterial(String.valueOf(raw));
-            if (material != null) {
-                materials.add(material);
-            }
+            rules.add(new CustomItemRule(material, enchantment));
         }
-        return materials;
+        return rules;
     }
 
-    public void addCustomDisabledItem(Material material) {
+    public void addCustomDisabledItem(Material material, Enchantment enchantment) {
         List<Map<String, Object>> entries = new ArrayList<>();
-        for (Material existing : customDisabledItems()) {
-            entries.add(Map.of("material", existing.name()));
+        for (CustomItemRule existing : customDisabledItems()) {
+            entries.add(existing.toMap());
         }
-        entries.add(Map.of("material", material.name()));
+        entries.add(new CustomItemRule(material, enchantment).toMap());
         set("disabled-items.custom-items", entries);
     }
 
-    public void removeCustomDisabledItem(Material material) {
+    public void removeCustomDisabledItem(int index) {
+        List<CustomItemRule> existing = customDisabledItems();
+        if (index < 0 || index >= existing.size()) {
+            return;
+        }
         List<Map<String, Object>> entries = new ArrayList<>();
-        for (Material existing : customDisabledItems()) {
-            if (existing != material) {
-                entries.add(Map.of("material", existing.name()));
+        for (int i = 0; i < existing.size(); i++) {
+            if (i != index) {
+                entries.add(existing.get(i).toMap());
             }
         }
         set("disabled-items.custom-items", entries);
+    }
+
+    private static Enchantment resolveEnchantment(String key) {
+        String path = key.startsWith("minecraft:") ? key.substring("minecraft:".length()) : key;
+        return org.bukkit.Registry.ENCHANTMENT.get(NamespacedKey.minecraft(path.toLowerCase(java.util.Locale.ROOT)));
     }
 
     // ---- disguise ----

@@ -20,7 +20,6 @@ import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -65,6 +64,10 @@ public final class DisguiseManager {
     // every world - populated the moment a disguised item is dropped (see
     // DisguiseProtectionListener), read/removed here on restore.
     private final Map<String, UUID> droppedInstances = new ConcurrentHashMap<>();
+    // instance id -> its LockedItem, independent of which player owns it -
+    // lets DisguiseProtectionListener answer "would this action split a
+    // tracked stack" in O(1) without knowing the owner. See isFullStack.
+    private final Map<String, LockedItem> byInstanceId = new ConcurrentHashMap<>();
     private BukkitTask flashTask;
     private BukkitTask refreshTask;
     private long flashTickCounter;
@@ -143,10 +146,11 @@ public final class DisguiseManager {
         }
         PlayerInventory inv = player.getInventory();
         for (LockedItem item : items) {
+            byInstanceId.remove(item.instanceId());
             if (restoreByInstanceId(player, inv, item)) {
                 continue;
             }
-            if (restoreDroppedInstance(player, item)) {
+            if (restoreDroppedInstance(item)) {
                 continue;
             }
             // genuinely couldn't find the disguise item anywhere - already
@@ -161,6 +165,28 @@ public final class DisguiseManager {
         }
     }
 
+    /** Public - {@link DisguiseProtectionListener} uses this to block any
+     * action that would split a tracked stack (partial drop, right-click
+     * "take half", drag-splitting a cursor stack across slots, ...). This
+     * is the actual fix for a real duplication bug found this session: a
+     * disguise item's instance id lives on its {@link ItemMeta}, which
+     * Bukkit happily copies onto BOTH halves of a split stack - once that
+     * happens, unlock() has two fragments claiming the same id and can only
+     * ever find/restore the first one it happens to check, leaving every
+     * other fragment behind forever as an inert, permanently-disguised
+     * orphan. Splitting is blocked outright instead of trying to support
+     * N fragments of one instance id, which would need exhaustive
+     * multi-location bookkeeping for a use case (splitting a locked stack
+     * into two piles) nobody actually needs while tagged. */
+    public boolean isFullStack(ItemStack item) {
+        String instanceId = instanceIdOf(item);
+        if (instanceId == null) {
+            return true;
+        }
+        LockedItem tracked = byInstanceId.get(instanceId);
+        return tracked == null || item.getAmount() >= tracked.original().getAmount();
+    }
+
     /** Marks a disguise item as dropped so {@link #unlock} can find it again
      * later - called from {@link DisguiseProtectionListener} the moment a
      * drop is allowed through. */
@@ -172,7 +198,7 @@ public final class DisguiseManager {
      * instead of scanning every entity in every loaded world - the item
      * might have moved (water current, hopper, someone nudging it) but its
      * entity id doesn't change just because it's sitting on the ground. */
-    private boolean restoreDroppedInstance(Player player, LockedItem item) {
+    private boolean restoreDroppedInstance(LockedItem item) {
         UUID entityId = droppedInstances.remove(item.instanceId());
         if (entityId == null) {
             return false;
@@ -187,9 +213,10 @@ public final class DisguiseManager {
         if (!matchesInstance(droppedItem.getItemStack(), item.instanceId())) {
             return false;
         }
-        droppedItem.remove();
-        player.getInventory().addItem(item.original()).values()
-                .forEach(leftover -> player.getWorld().dropItemNaturally(player.getLocation(), leftover));
+        // change it right where it's lying instead of teleporting it into
+        // the player's inventory - it's a dropped item sitting in the
+        // world, so that's where the "restore" should visibly happen.
+        droppedItem.setItemStack(item.original());
         return true;
     }
 
@@ -282,7 +309,9 @@ public final class DisguiseManager {
             return;
         }
         String instanceId = UUID.randomUUID().toString();
-        items.add(new LockedItem(instanceId, current.clone()));
+        LockedItem lockedItem = new LockedItem(instanceId, current.clone());
+        items.add(lockedItem);
+        byInstanceId.put(instanceId, lockedItem);
         loc.write(inv, buildDisguiseItem(loc, current.getAmount(), instanceId));
 
         if (loc instanceof ItemLocation.Equipment eq && ARMOR_SUFFIX.containsKey(eq.slot())) {
@@ -308,8 +337,12 @@ public final class DisguiseManager {
         if (type == Material.WIND_CHARGE) {
             return config.disableWindCharge();
         }
-        Set<Material> custom = config.customDisabledItems();
-        return custom.contains(type);
+        for (ScdiConfig.CustomItemRule rule : config.customDisabledItems()) {
+            if (rule.matches(item)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private ItemStack buildDisguiseItem(ItemLocation loc, int amount, String instanceId) {

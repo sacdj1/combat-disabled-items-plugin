@@ -11,6 +11,8 @@ import dev.sacdj.scdi.util.ChatInputManager;
 import dev.sacdj.scdi.warning.WarningManager;
 import net.md_5.bungee.api.ChatColor;
 import org.bukkit.Material;
+import org.bukkit.NamespacedKey;
+import org.bukkit.enchantments.Enchantment;
 import org.bukkit.entity.Mannequin;
 import net.md_5.bungee.api.chat.ClickEvent;
 import net.md_5.bungee.api.chat.ComponentBuilder;
@@ -198,11 +200,12 @@ public final class ScdiCommand implements CommandExecutor, TabCompleter {
             return matches(CUSTOMITEM_SUBCOMMANDS, args[1]);
         }
         if (args[0].equalsIgnoreCase("customitem") && args.length == 3 && args[1].equalsIgnoreCase("remove")) {
-            List<String> names = new ArrayList<>();
-            for (Material material : config.customDisabledItems()) {
-                names.add(material.name());
+            List<String> indices = new ArrayList<>();
+            var rules = config.customDisabledItems();
+            for (int i = 0; i < rules.size(); i++) {
+                indices.add(String.valueOf(i));
             }
-            return matches(names, args[2]);
+            return matches(indices, args[2]);
         }
         if (args[0].equalsIgnoreCase("debug")) {
             if (args.length == 2) {
@@ -461,50 +464,83 @@ public final class ScdiCommand implements CommandExecutor, TabCompleter {
         }
     }
 
+    /** Rules can match by material, by enchantment, or both together - "*"
+     * stands in for "no filter on this dimension" so e.g.
+     * "/scdi customitem add * sharpness" disables anything enchanted with
+     * Sharpness regardless of item type, "/scdi customitem add bow power"
+     * disables specifically an empowered bow (not every bow). */
     private void handleCustomItem(CommandSender sender, String[] args) {
         if (args.length == 0) {
-            sender.sendMessage(ChatColor.GRAY + "/scdi customitem <add|remove|list> [material]");
+            sender.sendMessage(ChatColor.GRAY + "/scdi customitem <add|remove|list> [material|*] [enchantment|*]");
             return;
         }
         switch (args[0].toLowerCase()) {
             case "list" -> {
-                var items = config.customDisabledItems();
-                if (items.isEmpty()) {
+                var rules = config.customDisabledItems();
+                if (rules.isEmpty()) {
                     sender.sendMessage(ChatColor.GRAY + "No custom disabled items configured.");
                     return;
                 }
-                for (Material material : items) {
-                    sender.sendMessage(ChatColor.AQUA + material.name());
+                for (int i = 0; i < rules.size(); i++) {
+                    sender.sendMessage(ChatColor.AQUA + "[" + i + "] " + ChatColor.GRAY + describeRule(rules.get(i)));
                 }
             }
             case "add" -> {
                 if (args.length < 2) {
-                    sender.sendMessage(ChatColor.RED + "Usage: /scdi customitem add <material>");
+                    sender.sendMessage(ChatColor.RED + "Usage: /scdi customitem add <material|*> [enchantment|*]");
                     return;
                 }
-                Material material = Material.matchMaterial(args[1]);
-                if (material == null) {
+                Material material = parseMaterialArg(args[1]);
+                if (material == null && !args[1].equals("*")) {
                     sender.sendMessage(ChatColor.RED + "Unknown material: " + args[1]);
                     return;
                 }
-                config.addCustomDisabledItem(material);
-                sender.sendMessage(ChatColor.GREEN + material.name() + " added to custom disabled items.");
+                Enchantment enchantment = null;
+                if (args.length >= 3 && !args[2].equals("*")) {
+                    enchantment = parseEnchantmentArg(args[2]);
+                    if (enchantment == null) {
+                        sender.sendMessage(ChatColor.RED + "Unknown enchantment: " + args[2]);
+                        return;
+                    }
+                }
+                if (material == null && enchantment == null) {
+                    sender.sendMessage(ChatColor.RED + "Need at least a material or an enchantment - not both '*'.");
+                    return;
+                }
+                config.addCustomDisabledItem(material, enchantment);
+                sender.sendMessage(ChatColor.GREEN + "Added: "
+                        + describeRule(new ScdiConfig.CustomItemRule(material, enchantment)));
             }
             case "remove" -> {
                 if (args.length < 2) {
-                    sender.sendMessage(ChatColor.RED + "Usage: /scdi customitem remove <material>");
+                    sender.sendMessage(ChatColor.RED + "Usage: /scdi customitem remove <index> (see customitem list)");
                     return;
                 }
-                Material material = Material.matchMaterial(args[1]);
-                if (material == null) {
-                    sender.sendMessage(ChatColor.RED + "Unknown material: " + args[1]);
-                    return;
+                try {
+                    int index = Integer.parseInt(args[1]);
+                    config.removeCustomDisabledItem(index);
+                    sender.sendMessage(ChatColor.GREEN + "Removed.");
+                } catch (NumberFormatException e) {
+                    sender.sendMessage(ChatColor.RED + "Usage: /scdi customitem remove <index> (see customitem list)");
                 }
-                config.removeCustomDisabledItem(material);
-                sender.sendMessage(ChatColor.GREEN + material.name() + " removed from custom disabled items.");
             }
             default -> sender.sendMessage(ChatColor.RED + "Unknown customitem subcommand.");
         }
+    }
+
+    private Material parseMaterialArg(String arg) {
+        return arg.equals("*") ? null : Material.matchMaterial(arg);
+    }
+
+    private Enchantment parseEnchantmentArg(String arg) {
+        NamespacedKey key = NamespacedKey.minecraft(arg.toLowerCase(java.util.Locale.ROOT));
+        return org.bukkit.Registry.ENCHANTMENT.get(key);
+    }
+
+    private String describeRule(ScdiConfig.CustomItemRule rule) {
+        String materialPart = rule.material() != null ? rule.material().name() : "any item";
+        String enchantPart = rule.enchantment() != null ? " + " + rule.enchantment().getKey().getKey() : "";
+        return materialPart + enchantPart;
     }
 
     /** /scdi debug tag|untag [player] - force a player into or out of combat
