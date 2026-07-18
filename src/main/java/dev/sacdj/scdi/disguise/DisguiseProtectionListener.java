@@ -13,14 +13,15 @@ import org.bukkit.event.player.PlayerDropItemEvent;
 import org.bukkit.inventory.Inventory;
 
 /**
- * Keeps a disguise item from leaving the player's own inventory - dropping
- * it, placing it as a block (if it happens to be a placeable material), or
- * moving it into a DIFFERENT inventory (a chest, another player's, a
- * villager trade, ...) all let it separate from {@link DisguiseManager}'s
- * tracking, and unlock() restoring the original on top of that is a real
- * item duplication bug, not just a cosmetic glitch - the player ends up
- * with the real item back AND the now-untracked disguise item as a free,
- * independent item.
+ * Keeps a disguise item from ending up somewhere {@link DisguiseManager}
+ * can't cheaply find it again - placing it as a block, or moving it into a
+ * DIFFERENT inventory (a chest, another player's, a villager trade, ...)
+ * both get cancelled outright, since either would separate it from
+ * tracking and let unlock() hand back the real item while the untracked
+ * disguise item survives independently as a free duplicate. Dropping is
+ * allowed instead of blocked - {@link DisguiseManager#trackDrop} records
+ * the dropped entity's own id so unlock() can find and revert it later
+ * with an O(1) lookup instead of scanning the world.
  *
  * <p>Deliberately does NOT block moving/reordering a disguise item WITHIN
  * the player's own inventory (hotbar order, which armor slot, hand swap) -
@@ -42,9 +43,9 @@ public final class DisguiseProtectionListener implements Listener {
 
     @EventHandler(ignoreCancelled = true)
     public void onDrop(PlayerDropItemEvent event) {
-        if (disguiseManager.isDisguised(event.getItemDrop().getItemStack())) {
-            event.setCancelled(true);
-            warn(event.getPlayer());
+        String instanceId = disguiseManager.instanceIdOf(event.getItemDrop().getItemStack());
+        if (instanceId != null) {
+            disguiseManager.trackDrop(instanceId, event.getItemDrop().getUniqueId());
         }
     }
 

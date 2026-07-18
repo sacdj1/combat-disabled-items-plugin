@@ -60,6 +60,11 @@ public final class DisguiseManager {
     private final WarningManager warnings;
 
     private final Map<UUID, List<LockedItem>> locked = new ConcurrentHashMap<>();
+    // instance id -> the dropped Item entity's own UUID, so unlock() can do
+    // an O(1) Bukkit.getEntity() lookup instead of scanning every entity in
+    // every world - populated the moment a disguised item is dropped (see
+    // DisguiseProtectionListener), read/removed here on restore.
+    private final Map<String, UUID> droppedInstances = new ConcurrentHashMap<>();
     private BukkitTask flashTask;
     private BukkitTask refreshTask;
     private long flashTickCounter;
@@ -138,19 +143,54 @@ public final class DisguiseManager {
         }
         PlayerInventory inv = player.getInventory();
         for (LockedItem item : items) {
-            if (!restoreByInstanceId(player, inv, item)) {
-                // genuinely couldn't find the disguise item anywhere in
-                // their inventory (shouldn't happen with drop/move/place
-                // protection in place, but never silently lose the real
-                // item over it either) - hand the original back wherever
-                // it fits, or drop it at their feet if their inventory's
-                // completely full.
-                Map<Integer, ItemStack> overflow = inv.addItem(item.original());
-                for (ItemStack leftover : overflow.values()) {
-                    player.getWorld().dropItemNaturally(player.getLocation(), leftover);
-                }
+            if (restoreByInstanceId(player, inv, item)) {
+                continue;
+            }
+            if (restoreDroppedInstance(player, item)) {
+                continue;
+            }
+            // genuinely couldn't find the disguise item anywhere - already
+            // picked up by someone else, burned, despawned, whatever. Never
+            // silently lose the real item over it either way: hand the
+            // original back wherever it fits, or drop it at their feet if
+            // their inventory's completely full.
+            Map<Integer, ItemStack> overflow = inv.addItem(item.original());
+            for (ItemStack leftover : overflow.values()) {
+                player.getWorld().dropItemNaturally(player.getLocation(), leftover);
             }
         }
+    }
+
+    /** Marks a disguise item as dropped so {@link #unlock} can find it again
+     * later - called from {@link DisguiseProtectionListener} the moment a
+     * drop is allowed through. */
+    public void trackDrop(String instanceId, UUID droppedEntityId) {
+        droppedInstances.put(instanceId, droppedEntityId);
+    }
+
+    /** O(1) lookup by the dropped entity's own UUID (set at drop time)
+     * instead of scanning every entity in every loaded world - the item
+     * might have moved (water current, hopper, someone nudging it) but its
+     * entity id doesn't change just because it's sitting on the ground. */
+    private boolean restoreDroppedInstance(Player player, LockedItem item) {
+        UUID entityId = droppedInstances.remove(item.instanceId());
+        if (entityId == null) {
+            return false;
+        }
+        org.bukkit.entity.Entity entity = plugin.getServer().getEntity(entityId);
+        if (!(entity instanceof org.bukkit.entity.Item droppedItem) || !droppedItem.isValid()) {
+            // already picked up (by anyone) or despawned - not an error,
+            // just means the fallback in unlock() gives the real item back
+            // without touching wherever the disguise item ended up.
+            return false;
+        }
+        if (!matchesInstance(droppedItem.getItemStack(), item.instanceId())) {
+            return false;
+        }
+        droppedItem.remove();
+        player.getInventory().addItem(item.original()).values()
+                .forEach(leftover -> player.getWorld().dropItemNaturally(player.getLocation(), leftover));
+        return true;
     }
 
     /** Searches every slot the item could currently be sitting in (it's
@@ -331,19 +371,26 @@ public final class DisguiseManager {
     }
 
     /** Public - used by {@link DisguiseProtectionListener} to block a
-     * disguise item leaving the player's own inventory (drop, place as a
-     * block) or moving into a different inventory (chest, trade, another
-     * player, ...) - both would separate it from the tracking that lets
-     * {@link #unlock} find it again, which is how the item duplication bug
-     * reported this session actually worked. Free movement WITHIN a
-     * player's own inventory is deliberately allowed - see the class
-     * javadoc. */
+     * disguise item moving into a DIFFERENT inventory (chest, trade,
+     * another player, ...) or being placed as a block, both of which would
+     * separate it from tracking in a way {@link #unlock} can't recover from
+     * cheaply. Dropping is allowed - see {@link #trackDrop}. */
     public boolean isDisguised(ItemStack item) {
         if (item == null) {
             return false;
         }
         ItemMeta meta = item.getItemMeta();
         return meta != null && meta.getPersistentDataContainer().has(markerKey, PersistentDataType.BOOLEAN);
+    }
+
+    /** Public - {@link DisguiseProtectionListener} reads this off a dropped
+     * item to call {@link #trackDrop}. Null if the item isn't a disguise. */
+    public String instanceIdOf(ItemStack item) {
+        if (item == null) {
+            return null;
+        }
+        ItemMeta meta = item.getItemMeta();
+        return meta == null ? null : meta.getPersistentDataContainer().get(instanceKey, PersistentDataType.STRING);
     }
 
     private record LockedItem(String instanceId, ItemStack original) {
