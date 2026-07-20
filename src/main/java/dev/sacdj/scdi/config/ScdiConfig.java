@@ -579,6 +579,10 @@ public final class ScdiConfig {
         return cfg.getBoolean("display.actionbar", true);
     }
 
+    public boolean showDisabledText() {
+        return cfg.getBoolean("display.show-disabled-text", true);
+    }
+
     public boolean showTitleOnTag() {
         return cfg.getBoolean("display.title-on-tag", true);
     }

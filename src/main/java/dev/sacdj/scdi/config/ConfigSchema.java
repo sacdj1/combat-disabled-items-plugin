@@ -118,7 +118,8 @@ public final class ConfigSchema {
             new Field("dummy.dps-window-ticks", Type.LONG),
             new Field("sounds.combat-volume", Type.DOUBLE),
             new Field("sounds.safe-volume", Type.DOUBLE),
-            new Field("display.show-team-on-tab", Type.BOOLEAN)
+            new Field("display.show-team-on-tab", Type.BOOLEAN),
+            new Field("display.show-disabled-text", Type.BOOLEAN)
     );
 
     private ConfigSchema() {

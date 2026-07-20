@@ -46,6 +46,7 @@ public final class CombatManager {
     private final OneShotTracker oneShotTracker;
 
     private final Map<UUID, CombatState> tagged = new ConcurrentHashMap<>();
+    private final Map<UUID, BukkitTask> flashTasks = new ConcurrentHashMap<>();
     private BukkitTask actionBarTask;
     private Objective belowNameObjective;
 
@@ -68,6 +69,10 @@ public final class CombatManager {
         if (actionBarTask != null) {
             actionBarTask.cancel();
         }
+        for (BukkitTask task : flashTasks.values()) {
+            task.cancel();
+        }
+        flashTasks.clear();
         for (CombatState state : tagged.values()) {
             state.cancel();
         }
@@ -138,6 +143,10 @@ public final class CombatManager {
             return;
         }
         state.cancel();
+        BukkitTask flashTask = flashTasks.remove(player.getUniqueId());
+        if (flashTask != null) {
+            flashTask.cancel();
+        }
         disguiseManager.unlock(player);
         oneShotTracker.onCombatEnd(player);
         if (belowNameObjective != null) {
@@ -173,9 +182,57 @@ public final class CombatManager {
                 continue;
             }
             long elapsedMs = totalMs - state.millisRemaining();
-            ChatColor color = phaseColor(elapsedMs, totalMs);
-            sendActionBar(player, color + "⚔ In Combat (" + state.secondsRemaining() + "s)");
+            sendActionBar(player, buildCombatText(state, elapsedMs, totalMs));
         }
+    }
+
+    /** Matches the datapack's combat_active.mcfunction wording/colors:
+     * red -> gold -> yellow across even thirds of the combat duration, with
+     * "- items disabled" appended when display.show-disabled-text is on. */
+    private String buildCombatText(CombatState state, long elapsedMs, long totalMs) {
+        String suffix = config.showDisabledText() ? " - items disabled (" : " (";
+        return "" + phaseColor(elapsedMs, totalMs) + "⚔ In Combat" + suffix + state.secondsRemaining() + "s)";
+    }
+
+    /** Same text as {@link #buildCombatText}, but with the datapack's
+     * "(Tagged!) " flashing yellow/white prefix used for the first second
+     * after a fresh tag - dark_red for the countdown itself during that
+     * window, not yet phase-graded (the datapack only starts the red/gold/
+     * yellow fade once a full second has elapsed too). */
+    private String buildTaggedFlashText(CombatState state, boolean flashOn) {
+        String suffix = config.showDisabledText() ? " - items disabled (" : " (";
+        ChatColor flashColor = flashOn ? ChatColor.YELLOW : ChatColor.WHITE;
+        return "" + flashColor + ChatColor.BOLD + "(Tagged!) " + ChatColor.DARK_RED
+                + "⚔ In Combat" + suffix + state.secondsRemaining() + "s)";
+    }
+
+    /** Runs at 100ms resolution (2 ticks) for exactly the first second after
+     * a fresh tag - matching the datapack's flash cadence - then
+     * self-cancels; {@link #tickActionBars}'s normal 1/sec cadence takes
+     * over seamlessly for the rest of the duration. Bounded to 10 short-lived
+     * packets per tag event instead of running fine-grained the whole fight,
+     * which is what the datapack itself does every tick (it's a command
+     * runtime, not a scheduled task system) - no reason to pay that cost
+     * continuously here just to match it visually for one second. */
+    private void startTagFlash(Player player) {
+        UUID id = player.getUniqueId();
+        BukkitTask previous = flashTasks.remove(id);
+        if (previous != null) {
+            previous.cancel();
+        }
+        int[] iteration = {0};
+        BukkitTask[] holder = new BukkitTask[1];
+        holder[0] = plugin.getServer().getScheduler().runTaskTimer(plugin, () -> {
+            CombatState state = tagged.get(id);
+            if (state == null || !player.isOnline() || iteration[0] >= 10) {
+                holder[0].cancel();
+                flashTasks.remove(id);
+                return;
+            }
+            sendActionBar(player, buildTaggedFlashText(state, iteration[0] % 2 == 0));
+            iteration[0]++;
+        }, 0L, 2L);
+        flashTasks.put(id, holder[0]);
     }
 
     /** below_name is a single GLOBAL scoreboard slot shared by the whole
@@ -230,18 +287,19 @@ public final class CombatManager {
 
     private void announceTagged(Player player) {
         if (config.showTitleOnTag()) {
+            // matches the datapack's on_hurt_by_player_first.mcfunction
+            // exactly: "title @s times 0 20 5" (fadeIn 0, stay 20 ticks,
+            // fadeOut 5 ticks) with this title/subtitle text.
             player.showTitle(Title.title(
-                    LEGACY.deserialize(ChatColor.YELLOW + "Tagged!"),
-                    Component.empty(),
-                    Title.Times.times(Duration.ZERO, Duration.ofMillis(1000), Duration.ofMillis(500))));
+                    LEGACY.deserialize(ChatColor.RED + "" + ChatColor.BOLD + "⚔ In Combat!"),
+                    LEGACY.deserialize(ChatColor.GRAY + "Items disabled for " + config.combatDuration().toSeconds() + "s"),
+                    Title.Times.times(Duration.ZERO, Duration.ofMillis(1000), Duration.ofMillis(250))));
         }
         if (config.combatSound() != null) {
             player.playSound(player.getLocation(), config.combatSound(), config.combatVolume(), config.combatPitch());
         }
         if (config.showActionBar()) {
-            // don't wait for the next 1/sec tickActionBars pass - show it
-            // the instant they're tagged instead of up to a second late.
-            sendActionBar(player, ChatColor.RED + "⚔ In Combat (" + config.combatDuration().toSeconds() + "s)");
+            startTagFlash(player);
         }
     }
 

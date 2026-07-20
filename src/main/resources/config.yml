@@ -147,6 +147,9 @@ sounds:
 
 display:
   actionbar: true
+  # whether the actionbar countdown also says "- items disabled" - off just
+  # shows the bare "In Combat (Ns)" timer.
+  show-disabled-text: true
   title-on-tag: true
   show-timer-above-head: false
   show-team-on-tab: false
