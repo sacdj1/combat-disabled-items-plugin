@@ -6,6 +6,8 @@ import dev.sacdj.scdi.combat.OneShotTracker;
 import dev.sacdj.scdi.command.ScdiCommand;
 import dev.sacdj.scdi.config.ConfigCodec;
 import dev.sacdj.scdi.config.ScdiConfig;
+import dev.sacdj.scdi.debug.VanishListener;
+import dev.sacdj.scdi.debug.VanishManager;
 import dev.sacdj.scdi.disguise.DisguiseManager;
 import dev.sacdj.scdi.disguise.DisguiseProtectionListener;
 import dev.sacdj.scdi.dummy.DummyListener;
@@ -39,13 +41,15 @@ public final class ScdiPlugin extends JavaPlugin {
         MenuManager menuManager = new MenuManager(this);
         ChatInputManager chatInput = new ChatInputManager(this);
         ConfigCodec codec = new ConfigCodec(this);
+        VanishManager vanishManager = new VanishManager(this);
 
         getServer().getPluginManager().registerEvents(
                 new CombatListener(config, combatManager, oneShotTracker, teamManager), this);
         getServer().getPluginManager().registerEvents(new DummyListener(dummyManager), this);
         getServer().getPluginManager().registerEvents(new DisguiseProtectionListener(disguiseManager), this);
-        getCommand("scdi").setExecutor(new ScdiCommand(
-                config, combatManager, menuManager, chatInput, codec, teamManager, dummyManager, warningManager));
+        getServer().getPluginManager().registerEvents(new VanishListener(vanishManager), this);
+        getCommand("scdi").setExecutor(new ScdiCommand(config, combatManager, menuManager, chatInput, codec,
+                teamManager, dummyManager, warningManager, vanishManager));
 
         combatManager.start();
         disguiseManager.start();

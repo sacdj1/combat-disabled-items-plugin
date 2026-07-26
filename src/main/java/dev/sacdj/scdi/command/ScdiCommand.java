@@ -3,6 +3,7 @@ package dev.sacdj.scdi.command;
 import dev.sacdj.scdi.combat.CombatManager;
 import dev.sacdj.scdi.config.ConfigCodec;
 import dev.sacdj.scdi.config.ScdiConfig;
+import dev.sacdj.scdi.debug.VanishManager;
 import dev.sacdj.scdi.dummy.DummyManager;
 import dev.sacdj.scdi.menu.MainMenu;
 import dev.sacdj.scdi.menu.MenuManager;
@@ -36,7 +37,7 @@ public final class ScdiCommand implements CommandExecutor, TabCompleter {
 
     private static final List<String> SUBCOMMANDS =
             List.of("menu", "reload", "status", "config", "export", "import", "team", "dummy", "settings", "customitem", "debug");
-    private static final List<String> DEBUG_SUBCOMMANDS = List.of("tag", "untag");
+    private static final List<String> DEBUG_SUBCOMMANDS = List.of("tag", "untag", "vanish");
     private static final List<String> CONFIG_SUBCOMMANDS = List.of("get", "set", "list");
     private static final List<String> TEAM_SUBCOMMANDS = List.of("request", "confirm", "reset");
     private static final List<String> DUMMY_SUBCOMMANDS = List.of("spawn", "remove", "removeall", "invincible", "mortal");
@@ -52,10 +53,11 @@ public final class ScdiCommand implements CommandExecutor, TabCompleter {
     private final TeamManager teams;
     private final DummyManager dummies;
     private final WarningManager warnings;
+    private final VanishManager vanish;
 
     public ScdiCommand(ScdiConfig config, CombatManager combat, MenuManager menuManager,
                         ChatInputManager chatInput, ConfigCodec codec, TeamManager teams,
-                        DummyManager dummies, WarningManager warnings) {
+                        DummyManager dummies, WarningManager warnings, VanishManager vanish) {
         this.config = config;
         this.combat = combat;
         this.menuManager = menuManager;
@@ -64,6 +66,7 @@ public final class ScdiCommand implements CommandExecutor, TabCompleter {
         this.teams = teams;
         this.dummies = dummies;
         this.warnings = warnings;
+        this.vanish = vanish;
     }
 
     @Override
@@ -546,23 +549,16 @@ public final class ScdiCommand implements CommandExecutor, TabCompleter {
     /** /scdi debug tag|untag [player] - force a player into or out of combat
      * instantly, without needing a real hit to land. For testing everything
      * downstream of a tag (disguise, warnings, armor flash, actionbar,
-     * below-name timer) without a second player or real PvP damage. */
+     * below-name timer) without a second player or real PvP damage.
+     * /scdi debug vanish [player] - testing-only, not a shipped feature; see
+     * {@link VanishManager}. */
     private void handleDebug(CommandSender sender, String[] args) {
         if (args.length == 0) {
-            sender.sendMessage(ChatColor.GRAY + "/scdi debug <tag|untag> [player]");
+            sender.sendMessage(ChatColor.GRAY + "/scdi debug <tag|untag|vanish> [player]");
             return;
         }
-        Player target;
-        if (args.length >= 2) {
-            target = sender.getServer().getPlayerExact(args[1]);
-            if (target == null) {
-                sender.sendMessage(ChatColor.RED + "Player not found or offline.");
-                return;
-            }
-        } else if (sender instanceof Player player) {
-            target = player;
-        } else {
-            sender.sendMessage(ChatColor.RED + "Usage from console: /scdi debug <tag|untag> <player>");
+        Player target = resolveDebugTarget(sender, args);
+        if (target == null) {
             return;
         }
         switch (args[0].toLowerCase()) {
@@ -574,8 +570,34 @@ public final class ScdiCommand implements CommandExecutor, TabCompleter {
                 combat.release(target);
                 sender.sendMessage(ChatColor.GREEN + "Released " + target.getName() + ".");
             }
+            case "vanish" -> {
+                boolean nowVanished = vanish.toggle(target);
+                sender.sendMessage(nowVanished
+                        ? ChatColor.GREEN + target.getName() + " is now vanished."
+                        : ChatColor.GREEN + target.getName() + " is no longer vanished.");
+            }
             default -> sender.sendMessage(ChatColor.RED + "Unknown debug subcommand.");
         }
+    }
+
+    /** Shared "/scdi debug &lt;sub&gt; [player]" target resolution - an
+     * explicit second arg looks up that player by exact name, otherwise the
+     * sender itself if they're a player; console with no player arg is
+     * rejected since there's nobody to default to. Sends its own error
+     * message and returns null on failure, so callers can just bail. */
+    private Player resolveDebugTarget(CommandSender sender, String[] args) {
+        if (args.length >= 2) {
+            Player target = sender.getServer().getPlayerExact(args[1]);
+            if (target == null) {
+                sender.sendMessage(ChatColor.RED + "Player not found or offline.");
+            }
+            return target;
+        }
+        if (sender instanceof Player player) {
+            return player;
+        }
+        sender.sendMessage(ChatColor.RED + "Usage from console: /scdi debug <tag|untag|vanish> <player>");
+        return null;
     }
 
     /** Coerces the typed-in string to match the existing value's type, so

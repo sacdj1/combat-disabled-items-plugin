@@ -1,6 +1,10 @@
 package dev.sacdj.scdi.disguise;
 
+import io.papermc.paper.event.block.CompostItemEvent;
+import io.papermc.paper.event.player.PlayerItemFrameChangeEvent;
 import net.md_5.bungee.api.ChatColor;
+import org.bukkit.Material;
+import org.bukkit.block.Block;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
@@ -9,8 +13,11 @@ import org.bukkit.event.entity.EntityPickupItemEvent;
 import org.bukkit.event.inventory.InventoryAction;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
+import org.bukkit.event.inventory.InventoryMoveItemEvent;
 import org.bukkit.event.inventory.InventoryType;
+import org.bukkit.event.player.PlayerArmorStandManipulateEvent;
 import org.bukkit.event.player.PlayerDropItemEvent;
+import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.ItemStack;
 
@@ -35,7 +42,11 @@ import java.util.Set;
  * the original owner STILL got a fresh replacement handed to them at
  * unlock.
  *
- * <p>Two things still ARE blocked outright:
+ * <p>Everything below is blocked outright rather than tracked, because each
+ * one either destroys/consumes the item through a path {@link
+ * DisguiseManager#reconcile} can't see (nothing to reconcile afterward - the
+ * item's just gone), or happens through an event that isn't even an
+ * inventory click/drag in the first place:
  * <ul>
  *   <li>Placing a disguise item as a block - that's functional USE of the
  *   item, not just storing/moving it, and disabling functional use is the
@@ -43,11 +54,18 @@ import java.util.Set;
  *   <li>Moving into a "consuming" inventory (a villager trade, a furnace,
  *   an anvil, a brewing stand, ...) - those can remove an item by a
  *   mechanism other than plain relocation (traded away, smelted, combined)
- *   just by clicking elsewhere in the SAME view, which {@link
- *   DisguiseManager#reconcile}'s next-tick scan can't reliably see through.
- *   Left untracked, that both lets a worthless disguise stand-in be
- *   "spent" for real value AND still hands the real original back at
- *   unlock - see {@link #SAFE_EXTERNAL_TYPES}.</li>
+ *   just by clicking elsewhere in the SAME view. Left untracked, that both
+ *   lets a worthless disguise stand-in be "spent" for real value AND still
+ *   hands the real original back at unlock - see
+ *   {@link #SAFE_EXTERNAL_TYPES}.</li>
+ *   <li>Composting - a direct block interaction, not an inventory click at
+ *   all; same "spend the decoy, still get the original back" problem as
+ *   above.</li>
+ *   <li>Equipping onto an armor stand, or placing into an item frame - also
+ *   direct entity interactions, not inventory events.</li>
+ *   <li>Hopper (or other block-automation) transfers - no player and no
+ *   inventory click involved, so nothing here would ever notice the item
+ *   moving.</li>
  * </ul>
  */
 public final class DisguiseProtectionListener implements Listener {
@@ -110,6 +128,21 @@ public final class DisguiseProtectionListener implements Listener {
             return;
         }
 
+        // someone else's tracked item turning up in THIS click - taken out
+        // of a shared chest/barrel/... by a stranger - reveals to the real
+        // item right here instead of silently becoming an untracked decoy
+        // in their inventory while the real owner still gets a fallback
+        // replacement later. A no-op if it's actually the clicker's own.
+        // Explicitly written back via the event setters rather than trusting
+        // in-place mutation of whatever getCurrentItem()/getCursor() handed
+        // back, since that's not guaranteed to be a live reference.
+        if (disguiseManager.revealForOtherPlayer(player, currentItem)) {
+            event.setCurrentItem(currentItem);
+        }
+        if (disguiseManager.revealForOtherPlayer(player, cursorItem)) {
+            event.setCursor(cursorItem);
+        }
+
         Inventory top = event.getView().getTopInventory();
         boolean external = top.getType() != InventoryType.CRAFTING;
         if (external) {
@@ -155,6 +188,71 @@ public final class DisguiseProtectionListener implements Listener {
         if (disguiseManager.isDisguised(event.getItemInHand())) {
             event.setCancelled(true);
             warn(event.getPlayer());
+        }
+    }
+
+    /** Composting consumes one unit of the item on every right-click
+     * (success chance only governs whether the compost level actually
+     * rises, not whether the item's spent) via a plain block interaction -
+     * not an inventory click, so nothing else here would ever see it. Left
+     * unblocked, that's a real duplication-of-value exploit: spend the
+     * worthless disguise decoy for a genuine compost-level increase, then
+     * still get the real original handed back at unlock anyway, since
+     * nothing tracked the item being destroyed. Blocked at the interaction
+     * itself (before {@link CompostItemEvent} even fires) rather than
+     * trying to undo it after - CompostItemEvent isn't even cancellable. */
+    @EventHandler(ignoreCancelled = true)
+    public void onComposterInteract(PlayerInteractEvent event) {
+        Block block = event.getClickedBlock();
+        if (event.getAction() != org.bukkit.event.block.Action.RIGHT_CLICK_BLOCK
+                || block == null || block.getType() != Material.COMPOSTER) {
+            return;
+        }
+        if (disguiseManager.isDisguised(event.getItem())) {
+            event.setCancelled(true);
+            warn(event.getPlayer());
+        }
+    }
+
+    /** Equipping a disguised item onto an armor stand happens via a direct
+     * entity right-click, not an inventory click - completely outside
+     * everything above. Only blocks PLACING (getPlayerItem, what's about
+     * to go ONTO the stand); taking an already-worn item back OFF is left
+     * alone so a disguise item that somehow ended up on a stand some other
+     * way isn't trapped there forever. */
+    @EventHandler(ignoreCancelled = true)
+    public void onArmorStandManipulate(PlayerArmorStandManipulateEvent event) {
+        if (disguiseManager.isDisguised(event.getPlayerItem())) {
+            event.setCancelled(true);
+            warn(event.getPlayer());
+        }
+    }
+
+    /** Same idea for item frames - placing an item into one is its own
+     * event, not an inventory click. Only blocks PLACE, for the same
+     * "don't trap an existing one" reason as the armor stand case above. */
+    @EventHandler(ignoreCancelled = true)
+    public void onItemFrameChange(PlayerItemFrameChangeEvent event) {
+        if (event.getAction() == PlayerItemFrameChangeEvent.ItemFrameChangeAction.PLACE
+                && disguiseManager.isDisguised(event.getItemStack())) {
+            event.setCancelled(true);
+            warn(event.getPlayer());
+        }
+    }
+
+    /** Hopper (or hopper-minecart/dropper-pushed) automation moving a
+     * disguised item between inventories happens with no player and no
+     * inventory click at all - reconcile() never runs, so
+     * externalInstances can go stale the moment automation quietly moves
+     * the item out from under wherever it was last seen. Blocked outright
+     * rather than taught to follow it: nobody needs a disabled item
+     * automatically sorted mid-fight, and this is a much smaller cost than
+     * either losing track of it or opening a new way to separate it from
+     * tracking. */
+    @EventHandler(ignoreCancelled = true)
+    public void onHopperMove(InventoryMoveItemEvent event) {
+        if (disguiseManager.isDisguised(event.getItem())) {
+            event.setCancelled(true);
         }
     }
 

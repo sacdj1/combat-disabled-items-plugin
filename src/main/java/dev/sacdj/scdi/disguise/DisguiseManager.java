@@ -295,13 +295,51 @@ public final class DisguiseManager {
      *
      * @return true if this pickup was a stranger's and got revealed. */
     public boolean revealForOtherPlayer(Player picker, org.bukkit.entity.Item droppedItem) {
-        String instanceId = instanceIdOf(droppedItem.getItemStack());
-        if (instanceId == null) {
+        LockedItem item = releaseIfOwnedByStranger(picker, instanceIdOf(droppedItem.getItemStack()));
+        if (item == null) {
             return false;
         }
-        UUID ownerId = instanceOwners.get(instanceId);
-        if (ownerId == null || ownerId.equals(picker.getUniqueId())) {
+        droppedItem.setItemStack(item.original());
+        return true;
+    }
+
+    /** Same idea as the overload above, for a disguised item found mid
+     * inventory click/drag instead of as a dropped entity - {@link
+     * DisguiseProtectionListener} calls this for every item a click/drag
+     * touches before doing anything else with it. Covers taking someone
+     * else's item out of a SHARED external inventory (a chest, barrel,
+     * ...): without this, {@link #reconcile} would only ever check the
+     * CLICKER's own tracked items (never finding a match, since the id
+     * belongs to a different player), silently leaving an untracked decoy
+     * in the clicker's inventory while the real owner still got a fallback
+     * replacement at their own unlock. A no-op (returns false) if the item
+     * isn't tracked, or the interactor IS the owner - mutates {@code stack}
+     * in place (type + meta only, amount untouched) so the caller doesn't
+     * need to separately write it back to whatever slot it came from. */
+    public boolean revealForOtherPlayer(Player interactor, ItemStack stack) {
+        LockedItem item = releaseIfOwnedByStranger(interactor, instanceIdOf(stack));
+        if (item == null) {
             return false;
+        }
+        ItemStack original = item.original();
+        stack.setType(original.getType());
+        stack.setItemMeta(original.getItemMeta());
+        return true;
+    }
+
+    /** Shared teardown for both revealForOtherPlayer overloads: if
+     * instanceId is tracked and owned by someone OTHER than interactor,
+     * fully releases that tracking (byInstanceId/instanceOwners/dropped/
+     * external, and the owner's own locked list) and returns the
+     * now-orphaned LockedItem for the caller to materialize. Returns null
+     * (no-op, nothing released) if untracked or interactor IS the owner. */
+    private LockedItem releaseIfOwnedByStranger(Player interactor, String instanceId) {
+        if (instanceId == null) {
+            return null;
+        }
+        UUID ownerId = instanceOwners.get(instanceId);
+        if (ownerId == null || ownerId.equals(interactor.getUniqueId())) {
+            return null;
         }
         LockedItem item = byInstanceId.remove(instanceId);
         instanceOwners.remove(instanceId);
@@ -311,10 +349,7 @@ public final class DisguiseManager {
         if (ownerItems != null && item != null) {
             ownerItems.remove(item);
         }
-        if (item != null) {
-            droppedItem.setItemStack(item.original());
-        }
-        return true;
+        return item;
     }
 
     /** O(1) lookup by the dropped entity's own UUID (set at drop time)
