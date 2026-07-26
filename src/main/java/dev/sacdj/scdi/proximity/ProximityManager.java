@@ -2,8 +2,10 @@ package dev.sacdj.scdi.proximity;
 
 import dev.sacdj.scdi.combat.CombatManager;
 import dev.sacdj.scdi.config.ScdiConfig;
+import dev.sacdj.scdi.dummy.DummyManager;
 import dev.sacdj.scdi.team.TeamManager;
 import org.bukkit.Location;
+import org.bukkit.entity.Mannequin;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.scheduler.BukkitTask;
@@ -28,17 +30,20 @@ public final class ProximityManager {
     private final ScdiConfig config;
     private final CombatManager combat;
     private final TeamManager teams;
+    private final DummyManager dummies;
 
     private final Map<UUID, Location> lastLocation = new ConcurrentHashMap<>();
     private final Map<UUID, Double> lastMovementSq = new ConcurrentHashMap<>();
     private BukkitTask task;
     private long tickCounter;
 
-    public ProximityManager(JavaPlugin plugin, ScdiConfig config, CombatManager combat, TeamManager teams) {
+    public ProximityManager(JavaPlugin plugin, ScdiConfig config, CombatManager combat, TeamManager teams,
+                             DummyManager dummies) {
         this.plugin = plugin;
         this.config = config;
         this.combat = combat;
         this.teams = teams;
+        this.dummies = dummies;
     }
 
     public void start() {
@@ -74,6 +79,30 @@ public final class ProximityManager {
                 checkPair(online.get(i), online.get(j));
             }
         }
+
+        if (config.dummyProximityTagging()) {
+            List<Mannequin> nearbyDummies = dummies.currentDummies();
+            for (Player player : online) {
+                for (Mannequin dummy : nearbyDummies) {
+                    checkDummyPair(player, dummy);
+                }
+            }
+        }
+    }
+
+    /** Same distance/retag-distance rule as {@link #checkPair}, but only
+     * ever tags the PLAYER - a dummy has no team/combat-tag state of its
+     * own, so the team-tag-proximity and role-by-movement branches below
+     * don't apply here. */
+    private void checkDummyPair(Player player, Mannequin dummy) {
+        if (!player.getWorld().equals(dummy.getWorld())) {
+            return;
+        }
+        double range = combat.isTagged(player) ? config.proximityRetagDistance() : config.proximityDistance();
+        if (player.getLocation().distanceSquared(dummy.getLocation()) > range * range) {
+            return;
+        }
+        combat.tag(player);
     }
 
     private void checkPair(Player a, Player b) {

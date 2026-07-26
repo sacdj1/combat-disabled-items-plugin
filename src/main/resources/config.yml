@@ -13,13 +13,23 @@ combat:
   ranged-attacks-tag: true
   team-tag-attacker: true
   team-tag-victim: false
+  # safety net: continuously re-check/restore nulled items every interval
+  # for anyone NOT currently tagged (default on) - catches a stray
+  # disguised item left behind by a bug/crash/plugin conflict instead of
+  # only ever restoring exactly once, right when combat ends. Off costs
+  # less on a busy server but is less tamper-resistant.
+  passive-restore: true
+  passive-restore-interval-ticks: 20
 
 disabled-items:
   firework-rocket: true
   wind-charge: false
   elytra: false
   armor: false
-  scan-full-inventory: true
+  # independent toggles (matches the datapack) - hotbar is slots 0-8,
+  # extended is the rest of the backpack (9-35).
+  scan-hotbar: true
+  scan-extended-inventory: true
   # each entry: {material: "ENDER_PEARL"} - any extra held item to disable
   # while tagged, on top of the built-ins above
   custom-items: []
@@ -118,6 +128,13 @@ dummy:
   announce-range: 24.0
   announce-cheated-death: false
   pickup-items: false
+  # hitting a dummy tags the attacker, same as hitting a real player would -
+  # lets you test the whole tag flow solo, without needing a second player.
+  tagging: true
+  # whether a dummy standing nearby counts as "another player" for
+  # proximity tagging (proximity.enabled) - off excludes dummies entirely,
+  # useful for testing without a leftover dummy silently keeping you locked.
+  proximity-tagging: true
   # whether a NEW dummy self-extinguishes when on fire - either while in
   # its own combat lock, or specifically right after cheating death (a
   # fresh "life" putting itself out along with everything else resetting).
@@ -152,4 +169,9 @@ display:
   show-disabled-text: true
   title-on-tag: true
   show-timer-above-head: false
+  # floating countdown that follows above a tagged player's head - a real
+  # in-world text_display entity, not the below-name scoreboard slot above
+  # (that's global/shared; this one's per-player and visible to everyone
+  # around, not just in their own nametag line).
+  show-timer-text-display: false
   show-team-on-tab: false

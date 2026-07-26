@@ -6,7 +6,12 @@ import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
 import net.kyori.adventure.title.Title;
 import net.md_5.bungee.api.ChatColor;
+import org.bukkit.Color;
+import org.bukkit.Location;
+import org.bukkit.entity.Display;
+import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
+import org.bukkit.entity.TextDisplay;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.scheduler.BukkitTask;
 import org.bukkit.scoreboard.DisplaySlot;
@@ -47,7 +52,11 @@ public final class CombatManager {
 
     private final Map<UUID, CombatState> tagged = new ConcurrentHashMap<>();
     private final Map<UUID, BukkitTask> flashTasks = new ConcurrentHashMap<>();
+    private final Map<UUID, UUID> timerDisplays = new ConcurrentHashMap<>();
     private BukkitTask actionBarTask;
+    private BukkitTask timerDisplayTask;
+    private BukkitTask passiveRestoreTask;
+    private long passiveRestoreTickCounter;
     private Objective belowNameObjective;
 
     public CombatManager(JavaPlugin plugin, ScdiConfig config, DisguiseManager disguiseManager,
@@ -63,16 +72,39 @@ public final class CombatManager {
         // display's own precision), so this runs at 1/sec, scoped only to
         // currently-tagged players - not the whole playerbase, not 20/sec.
         actionBarTask = plugin.getServer().getScheduler().runTaskTimer(plugin, this::tickActionBars, 0L, 20L);
+        // the floating display needs to visibly track a MOVING player, so
+        // it runs faster than the actionbar - still nowhere near the
+        // datapack's every-tick rate, and only doing any work at all while
+        // display.show-timer-text-display is on and someone's tagged.
+        timerDisplayTask = plugin.getServer().getScheduler().runTaskTimer(plugin, this::tickTimerDisplays, 0L, 4L);
+        // 1-tick resolution so combat.passive-restore-interval-ticks can be
+        // changed live via /scdi reload without rescheduling anything -
+        // tickPassiveRestore itself throttles the real work against that
+        // value, same pattern DisguiseManager's tickFlash uses.
+        passiveRestoreTask = plugin.getServer().getScheduler().runTaskTimer(plugin, this::tickPassiveRestore, 0L, 1L);
     }
 
     public void stop() {
         if (actionBarTask != null) {
             actionBarTask.cancel();
         }
+        if (timerDisplayTask != null) {
+            timerDisplayTask.cancel();
+        }
+        if (passiveRestoreTask != null) {
+            passiveRestoreTask.cancel();
+        }
         for (BukkitTask task : flashTasks.values()) {
             task.cancel();
         }
         flashTasks.clear();
+        for (UUID displayId : timerDisplays.values()) {
+            Entity display = plugin.getServer().getEntity(displayId);
+            if (display != null) {
+                display.remove();
+            }
+        }
+        timerDisplays.clear();
         for (CombatState state : tagged.values()) {
             state.cancel();
         }
@@ -147,6 +179,13 @@ public final class CombatManager {
         if (flashTask != null) {
             flashTask.cancel();
         }
+        UUID displayId = timerDisplays.remove(player.getUniqueId());
+        if (displayId != null) {
+            Entity display = plugin.getServer().getEntity(displayId);
+            if (display != null) {
+                display.remove();
+            }
+        }
         disguiseManager.unlock(player);
         oneShotTracker.onCombatEnd(player);
         if (belowNameObjective != null) {
@@ -183,6 +222,82 @@ public final class CombatManager {
             }
             long elapsedMs = totalMs - state.millisRemaining();
             sendActionBar(player, buildCombatText(state, elapsedMs, totalMs));
+        }
+    }
+
+    /** Floating countdown that follows above a tagged player's head - a
+     * real in-world {@link TextDisplay}, not the below_name scoreboard slot
+     * (that one's global/shared and only shows in the player's own nametag
+     * line; this one's visible to anyone standing around them). Position is
+     * re-teleported every pass with a matching interpolation duration, so
+     * it reads as smoothly following a moving player rather than snapping. */
+    private void tickTimerDisplays() {
+        if (!config.showTimerTextDisplay() || tagged.isEmpty()) {
+            return;
+        }
+        long totalMs = Math.max(1, config.combatDuration().toMillis());
+        for (UUID id : tagged.keySet()) {
+            Player player = plugin.getServer().getPlayer(id);
+            CombatState state = tagged.get(id);
+            if (player == null || state == null) {
+                continue;
+            }
+            TextDisplay display = timerDisplayFor(id);
+            if (display == null) {
+                display = spawnTimerDisplay(player);
+                timerDisplays.put(id, display.getUniqueId());
+            }
+            long elapsedMs = totalMs - state.millisRemaining();
+            boolean flashPhase = elapsedMs < 1000;
+            ChatColor color = flashPhase
+                    ? ((elapsedMs / 100) % 2 == 0 ? ChatColor.YELLOW : ChatColor.WHITE)
+                    : phaseColor(elapsedMs, totalMs);
+            display.text(LEGACY.deserialize(color + "" + ChatColor.BOLD + "⚔ " + state.secondsRemaining() + "s"));
+            display.teleport(player.getLocation().add(0, 2.6, 0));
+        }
+    }
+
+    private TextDisplay timerDisplayFor(UUID playerId) {
+        UUID displayId = timerDisplays.get(playerId);
+        if (displayId == null) {
+            return null;
+        }
+        Entity entity = plugin.getServer().getEntity(displayId);
+        return entity instanceof TextDisplay display ? display : null;
+    }
+
+    private TextDisplay spawnTimerDisplay(Player player) {
+        Location loc = player.getLocation().add(0, 2.6, 0);
+        return player.getWorld().spawn(loc, TextDisplay.class, td -> {
+            td.setBillboard(Display.Billboard.CENTER);
+            td.setAlignment(TextDisplay.TextAlignment.CENTER);
+            td.setSeeThrough(false);
+            td.setDefaultBackground(false);
+            td.setBackgroundColor(Color.fromARGB(64, 0, 0, 0));
+            td.setInterpolationDuration(4);
+            td.setInterpolationDelay(0);
+        });
+    }
+
+    /** Safety net (combat.passive-restore, default on): re-verifies anyone
+     * NOT currently tagged has nothing left disguised, catching a stray
+     * locked item that a bug/plugin conflict/desync left behind instead of
+     * only ever cleaning up exactly once, right when combat ends normally.
+     * {@link DisguiseManager#unlock} is already a cheap no-op for a player
+     * with nothing tracked, so sweeping every online untagged player every
+     * interval costs effectively nothing in the common case. */
+    private void tickPassiveRestore() {
+        if (!config.passiveRestore()) {
+            return;
+        }
+        passiveRestoreTickCounter++;
+        if (passiveRestoreTickCounter % Math.max(1, config.passiveRestoreIntervalTicks()) != 0) {
+            return;
+        }
+        for (Player player : plugin.getServer().getOnlinePlayers()) {
+            if (!isTagged(player)) {
+                disguiseManager.unlock(player);
+            }
         }
     }
 

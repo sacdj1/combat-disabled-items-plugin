@@ -119,7 +119,20 @@ public final class ConfigSchema {
             new Field("sounds.combat-volume", Type.DOUBLE),
             new Field("sounds.safe-volume", Type.DOUBLE),
             new Field("display.show-team-on-tab", Type.BOOLEAN),
-            new Field("display.show-disabled-text", Type.BOOLEAN)
+            new Field("display.show-disabled-text", Type.BOOLEAN),
+
+            // appended when disabled-items.scan-full-inventory was split into
+            // two independent toggles (matches the datapack) - the old
+            // scan-full-inventory field above is now dead (no longer read by
+            // ScdiConfig) but stays in the list, never removed, per the class
+            // comment.
+            new Field("disabled-items.scan-hotbar", Type.BOOLEAN),
+            new Field("disabled-items.scan-extended-inventory", Type.BOOLEAN),
+            new Field("combat.passive-restore", Type.BOOLEAN),
+            new Field("combat.passive-restore-interval-ticks", Type.LONG),
+            new Field("dummy.tagging", Type.BOOLEAN),
+            new Field("dummy.proximity-tagging", Type.BOOLEAN),
+            new Field("display.show-timer-text-display", Type.BOOLEAN)
     );
 
     private ConfigSchema() {

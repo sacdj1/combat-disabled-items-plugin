@@ -29,8 +29,10 @@ public final class DisabledItemsMenu implements MenuScreen {
         inv.setItem(10, MenuItems.toggle("Wind charges", config.disableWindCharge()));
         inv.setItem(11, MenuItems.toggle("Elytra", config.disableElytra(),
                 "Only the worn chestplate slot."));
-        inv.setItem(12, MenuItems.toggle("Scan full inventory", config.scanFullInventory(),
-                "Also lock a matching item anywhere in the backpack, not just held/worn."));
+        inv.setItem(12, MenuItems.toggle("Scan hotbar", config.scanHotbar(),
+                "Also lock a matching item anywhere in the hotbar, not just held/worn."));
+        inv.setItem(14, MenuItems.toggle("Scan backpack", config.scanExtendedInventory(),
+                "Also lock a matching item anywhere in the rest of the backpack."));
         inv.setItem(13, MenuItems.toggle("Worn armor", config.disableArmor(),
                 "All 4 armor slots, not just elytra."));
         inv.setItem(15, MenuItems.nav(Material.CHEST, "Custom Items",
@@ -45,7 +47,8 @@ public final class DisabledItemsMenu implements MenuScreen {
             case 9 -> toggleAndRefresh(player, manager, "disabled-items.firework-rocket", config.disableFireworkRocket());
             case 10 -> toggleAndRefresh(player, manager, "disabled-items.wind-charge", config.disableWindCharge());
             case 11 -> toggleAndRefresh(player, manager, "disabled-items.elytra", config.disableElytra());
-            case 12 -> toggleAndRefresh(player, manager, "disabled-items.scan-full-inventory", config.scanFullInventory());
+            case 12 -> toggleAndRefresh(player, manager, "disabled-items.scan-hotbar", config.scanHotbar());
+            case 14 -> toggleAndRefresh(player, manager, "disabled-items.scan-extended-inventory", config.scanExtendedInventory());
             case 13 -> toggleAndRefresh(player, manager, "disabled-items.armor", config.disableArmor());
             case 15 -> manager.open(player, new CustomItemsMenu(config, chatInput));
             default -> {

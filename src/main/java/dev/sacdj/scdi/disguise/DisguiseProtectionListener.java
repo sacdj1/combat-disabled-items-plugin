@@ -92,6 +92,9 @@ public final class DisguiseProtectionListener implements Listener {
 
     @EventHandler(ignoreCancelled = true)
     public void onDrop(PlayerDropItemEvent event) {
+        if (!disguiseManager.hasAnyTracked()) {
+            return;
+        }
         ItemStack dropped = event.getItemDrop().getItemStack();
         String instanceId = disguiseManager.instanceIdOf(dropped);
         if (instanceId == null) {
@@ -110,7 +113,7 @@ public final class DisguiseProtectionListener implements Listener {
 
     @EventHandler(ignoreCancelled = true)
     public void onPickup(EntityPickupItemEvent event) {
-        if (!(event.getEntity() instanceof Player picker)) {
+        if (!disguiseManager.hasAnyTracked() || !(event.getEntity() instanceof Player picker)) {
             return;
         }
         disguiseManager.revealForOtherPlayer(picker, event.getItem());
@@ -118,6 +121,9 @@ public final class DisguiseProtectionListener implements Listener {
 
     @EventHandler(ignoreCancelled = true)
     public void onClick(InventoryClickEvent event) {
+        if (!disguiseManager.hasAnyTracked()) {
+            return;
+        }
         ItemStack currentItem = event.getCurrentItem();
         ItemStack cursorItem = event.getCursor();
         boolean involvesDisguise = disguiseManager.isDisguised(currentItem) || disguiseManager.isDisguised(cursorItem);
@@ -163,7 +169,7 @@ public final class DisguiseProtectionListener implements Listener {
 
     @EventHandler(ignoreCancelled = true)
     public void onDrag(InventoryDragEvent event) {
-        if (!disguiseManager.isDisguised(event.getOldCursor())) {
+        if (!disguiseManager.hasAnyTracked() || !disguiseManager.isDisguised(event.getOldCursor())) {
             return;
         }
         if (!(event.getWhoClicked() instanceof Player player)) {
@@ -185,7 +191,7 @@ public final class DisguiseProtectionListener implements Listener {
 
     @EventHandler(ignoreCancelled = true)
     public void onPlace(BlockPlaceEvent event) {
-        if (disguiseManager.isDisguised(event.getItemInHand())) {
+        if (disguiseManager.hasAnyTracked() && disguiseManager.isDisguised(event.getItemInHand())) {
             event.setCancelled(true);
             warn(event.getPlayer());
         }
@@ -203,6 +209,9 @@ public final class DisguiseProtectionListener implements Listener {
      * trying to undo it after - CompostItemEvent isn't even cancellable. */
     @EventHandler(ignoreCancelled = true)
     public void onComposterInteract(PlayerInteractEvent event) {
+        if (!disguiseManager.hasAnyTracked()) {
+            return;
+        }
         Block block = event.getClickedBlock();
         if (event.getAction() != org.bukkit.event.block.Action.RIGHT_CLICK_BLOCK
                 || block == null || block.getType() != Material.COMPOSTER) {
@@ -222,7 +231,7 @@ public final class DisguiseProtectionListener implements Listener {
      * way isn't trapped there forever. */
     @EventHandler(ignoreCancelled = true)
     public void onArmorStandManipulate(PlayerArmorStandManipulateEvent event) {
-        if (disguiseManager.isDisguised(event.getPlayerItem())) {
+        if (disguiseManager.hasAnyTracked() && disguiseManager.isDisguised(event.getPlayerItem())) {
             event.setCancelled(true);
             warn(event.getPlayer());
         }
@@ -233,7 +242,8 @@ public final class DisguiseProtectionListener implements Listener {
      * "don't trap an existing one" reason as the armor stand case above. */
     @EventHandler(ignoreCancelled = true)
     public void onItemFrameChange(PlayerItemFrameChangeEvent event) {
-        if (event.getAction() == PlayerItemFrameChangeEvent.ItemFrameChangeAction.PLACE
+        if (disguiseManager.hasAnyTracked()
+                && event.getAction() == PlayerItemFrameChangeEvent.ItemFrameChangeAction.PLACE
                 && disguiseManager.isDisguised(event.getItemStack())) {
             event.setCancelled(true);
             warn(event.getPlayer());
@@ -251,7 +261,7 @@ public final class DisguiseProtectionListener implements Listener {
      * tracking. */
     @EventHandler(ignoreCancelled = true)
     public void onHopperMove(InventoryMoveItemEvent event) {
-        if (disguiseManager.isDisguised(event.getItem())) {
+        if (disguiseManager.hasAnyTracked() && disguiseManager.isDisguised(event.getItem())) {
             event.setCancelled(true);
         }
     }

@@ -36,8 +36,8 @@ public final class ScdiPlugin extends JavaPlugin {
         OneShotTracker oneShotTracker = new OneShotTracker(config);
         combatManager = new CombatManager(this, config, disguiseManager, oneShotTracker);
         teamManager = new TeamManager(this, config);
-        proximityManager = new ProximityManager(this, config, combatManager, teamManager);
         dummyManager = new DummyManager(this, config);
+        proximityManager = new ProximityManager(this, config, combatManager, teamManager, dummyManager);
         MenuManager menuManager = new MenuManager(this);
         ChatInputManager chatInput = new ChatInputManager(this);
         ConfigCodec codec = new ConfigCodec(this);
@@ -45,7 +45,7 @@ public final class ScdiPlugin extends JavaPlugin {
 
         getServer().getPluginManager().registerEvents(
                 new CombatListener(config, combatManager, oneShotTracker, teamManager), this);
-        getServer().getPluginManager().registerEvents(new DummyListener(dummyManager), this);
+        getServer().getPluginManager().registerEvents(new DummyListener(dummyManager, combatManager, config), this);
         getServer().getPluginManager().registerEvents(new DisguiseProtectionListener(disguiseManager), this);
         getServer().getPluginManager().registerEvents(new VanishListener(vanishManager), this);
         getCommand("scdi").setExecutor(new ScdiCommand(config, combatManager, menuManager, chatInput, codec,

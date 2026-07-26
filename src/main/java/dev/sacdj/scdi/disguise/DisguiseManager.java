@@ -136,6 +136,18 @@ public final class DisguiseManager {
         }
     }
 
+    /** Public - {@link DisguiseProtectionListener} checks this FIRST in
+     * every handler, before even reading item meta off whatever
+     * click/drag/pickup/interact triggered it. Several of those events
+     * (item pickup, inventory clicks, hopper transfers) fire constantly for
+     * completely unrelated activity server-wide - on a server where
+     * nothing is currently disguised (the common case outside an active
+     * fight), this turns the whole listener into a single empty-map check
+     * per event instead of an ItemMeta/PDC lookup. */
+    public boolean hasAnyTracked() {
+        return !byInstanceId.isEmpty();
+    }
+
     public void lock(Player player) {
         locked.computeIfAbsent(player.getUniqueId(), k -> new ArrayList<>());
         List<LockedItem> items = locked.get(player.getUniqueId());
@@ -154,8 +166,15 @@ public final class DisguiseManager {
             lockIfMatch(player, items, inv, new ItemLocation.Equipment(EquipmentSlot.FEET));
         }
 
-        if (config.scanFullInventory()) {
-            for (int i = 0; i < 36; i++) {
+        // independent toggles matching the datapack: hotbar (0-8) and the
+        // rest of the backpack (9-35) can each be scanned on their own.
+        if (config.scanHotbar()) {
+            for (int i = 0; i < 9; i++) {
+                lockIfMatch(player, items, inv, new ItemLocation.InventorySlot(i));
+            }
+        }
+        if (config.scanExtendedInventory()) {
+            for (int i = 9; i < 36; i++) {
                 lockIfMatch(player, items, inv, new ItemLocation.InventorySlot(i));
             }
         }
@@ -529,8 +548,8 @@ public final class DisguiseManager {
 
     /** Re-checks a still-tagged player's inventory for anything that should
      * be locked but isn't yet (e.g. picked up mid-fight, or swapped into a
-     * slot scanFullInventory watches) - a lighter version of {@link #lock},
-     * safe to call repeatedly on an already-locked player. */
+     * watched slot) - a lighter version of {@link #lock}, safe to call
+     * repeatedly on an already-locked player. */
     public void refresh(Player player) {
         if (!locked.containsKey(player.getUniqueId())) {
             return;

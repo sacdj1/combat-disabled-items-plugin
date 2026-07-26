@@ -134,6 +134,14 @@ public final class ScdiConfig {
         return cfg.getBoolean("combat.team-tag-victim", false);
     }
 
+    public boolean passiveRestore() {
+        return cfg.getBoolean("combat.passive-restore", true);
+    }
+
+    public long passiveRestoreIntervalTicks() {
+        return cfg.getLong("combat.passive-restore-interval-ticks", 20);
+    }
+
     // ---- disabled-items ----
 
     public boolean disableFireworkRocket() {
@@ -152,8 +160,12 @@ public final class ScdiConfig {
         return cfg.getBoolean("disabled-items.armor", false);
     }
 
-    public boolean scanFullInventory() {
-        return cfg.getBoolean("disabled-items.scan-full-inventory", true);
+    public boolean scanHotbar() {
+        return cfg.getBoolean("disabled-items.scan-hotbar", true);
+    }
+
+    public boolean scanExtendedInventory() {
+        return cfg.getBoolean("disabled-items.scan-extended-inventory", true);
     }
 
     /** 0 means "use combat.duration-ms" (the global timer). */
@@ -501,6 +513,18 @@ public final class ScdiConfig {
         return cfg.getBoolean("dummy.pickup-items", false);
     }
 
+    /** Hitting a dummy tags the attacker, same as hitting a real player -
+     * lets the whole tag flow be tested solo. */
+    public boolean dummyTagging() {
+        return cfg.getBoolean("dummy.tagging", true);
+    }
+
+    /** Whether a nearby dummy counts as "another player" for
+     * proximity.enabled tagging. */
+    public boolean dummyProximityTagging() {
+        return cfg.getBoolean("dummy.proximity-tagging", true);
+    }
+
     public double dummyAnnounceRange() {
         return cfg.getDouble("dummy.announce-range", 24.0);
     }
@@ -589,6 +613,10 @@ public final class ScdiConfig {
 
     public boolean showTimerAboveHead() {
         return cfg.getBoolean("display.show-timer-above-head", false);
+    }
+
+    public boolean showTimerTextDisplay() {
+        return cfg.getBoolean("display.show-timer-text-display", false);
     }
 
     public boolean showTeamOnTab() {

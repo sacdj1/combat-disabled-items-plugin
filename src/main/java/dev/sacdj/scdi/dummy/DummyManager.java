@@ -22,7 +22,9 @@ import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.scheduler.BukkitTask;
 
+import java.util.ArrayList;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -115,6 +117,20 @@ public final class DummyManager {
 
     public boolean isDummy(Entity entity) {
         return dummies.containsKey(entity.getUniqueId());
+    }
+
+    /** Public - {@link dev.sacdj.scdi.proximity.ProximityManager} uses this
+     * for dummy.proximity-tagging, to also check distance against every
+     * currently-spawned dummy, not just other online players. */
+    public List<Mannequin> currentDummies() {
+        List<Mannequin> result = new ArrayList<>();
+        for (UUID id : dummies.keySet()) {
+            Entity entity = plugin.getServer().getEntity(id);
+            if (entity instanceof Mannequin mannequin) {
+                result.add(mannequin);
+            }
+        }
+        return result;
     }
 
     /** @return an error message, or null on success. */
